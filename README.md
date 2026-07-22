@@ -78,7 +78,7 @@ aeroshield-iq/
 │   │   └── ml/
 │   │       ├── inference.py        # Grid + single-point prediction
 │   │       ├── plume_math.py       # Reverse Gaussian-plume source attribution
-│   │       └── train.py            # ⚠️ synthetic Bangalore demo trainer — NOT the real pipeline
+│   │       └── train.py            # synthetic Bangalore demo trainer — NOT the real pipeline
 │   └── pipeline/
 │       ├── step1_download_openaq.py
 │       ├── step2_spatial_layers.py
