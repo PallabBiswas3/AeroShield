@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.Python
+build/
+dist/
+eggs/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+backend/.venv/
+backend/venv/
+
+# Environment files
+.env
+.env.*
+backend/.env
+backend/.env.*
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Frontend / Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+
+# Project-specific generated artifacts
+backend/*.sqlite3
+backend/*.db
+backend/*.pkl
+backend/*.joblib
+backend/*.model

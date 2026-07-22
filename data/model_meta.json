@@ -1,0 +1,47 @@
+{
+  "features": [
+    "x",
+    "y",
+    "hour",
+    "day_of_week",
+    "month",
+    "wind_speed",
+    "wind_direction",
+    "wind_sin",
+    "wind_cos",
+    "stability_class",
+    "boundary_layer_height",
+    "traffic_density",
+    "source_flux_log",
+    "lag_1h_pm25",
+    "lag_3h_pm25",
+    "no2",
+    "co",
+    "pm10"
+  ],
+  "bonus_features": [
+    "no2",
+    "co",
+    "pm10"
+  ],
+  "n_training_rows": 11807,
+  "data_source": "real_openaq_delhi_2025_fixed",
+  "metrics": {
+    "rmse": 14.296,
+    "mae": 11.428,
+    "within_15pct": 71.9,
+    "within_30pct": 96.7
+  },
+  "fixes_applied": [
+    "pm25_outlier_cap_500",
+    "forward_fill_imputation",
+    "wind_seasonal_default_imputation"
+  ],
+  "grid": {
+    "size": 15,
+    "center_lat": 28.628,
+    "center_lon": 77.209,
+    "city": "Delhi"
+  },
+  "trained_at": "2026-06-25T11:19:08.735257"
+}

@@ -1,0 +1,74 @@
+[
+  {
+    "source_id": 1,
+    "name": "Bawana Industrial Estate",
+    "type": "Heavy Industrial",
+    "lat": 28.772,
+    "lon": 77.0398,
+    "intensity": 850,
+    "description": "Largest industrial estate in Delhi. Steel rolling, electroplating, chemical units. ~8000 factories."
+  },
+  {
+    "source_id": 2,
+    "name": "Narela Industrial Estate",
+    "type": "Heavy Industrial",
+    "lat": 28.854,
+    "lon": 77.094,
+    "intensity": 720,
+    "description": "Relocated units from central Delhi. Metal fabrication, plastics, rubber. Persistent high-PM zone."
+  },
+  {
+    "source_id": 3,
+    "name": "Wazirpur Industrial Area",
+    "type": "Industrial Stack",
+    "lat": 28.706,
+    "lon": 77.17,
+    "intensity": 680,
+    "description": "Steel re-rolling mills, smelters. Among the highest SO2 and PM2.5 sources in North Delhi."
+  },
+  {
+    "source_id": 4,
+    "name": "Okhla Industrial Area (Phase 1 & 2)",
+    "type": "Industrial Stack",
+    "lat": 28.5355,
+    "lon": 77.27,
+    "intensity": 590,
+    "description": "Printing, chemicals, plastics, garments. Largest industrial cluster in South Delhi."
+  },
+  {
+    "source_id": 5,
+    "name": "Jhilmil Industrial Area",
+    "type": "Industrial Stack",
+    "lat": 28.67,
+    "lon": 77.31,
+    "intensity": 520,
+    "description": "East Delhi. Electronics, garments, small-scale manufacturing. Near Anand Vihar high-PM zone."
+  },
+  {
+    "source_id": 6,
+    "name": "Mayapuri Industrial Area",
+    "type": "Industrial Stack",
+    "lat": 28.6335,
+    "lon": 77.1098,
+    "intensity": 460,
+    "description": "Auto scrap yards, metal recycling. Generates significant fugitive dust and fume emissions."
+  },
+  {
+    "source_id": 7,
+    "name": "Delhi Metro Phase IV Construction (Multiple Sites)",
+    "type": "Construction",
+    "lat": 28.68,
+    "lon": 77.22,
+    "intensity": 380,
+    "description": "Multiple active construction fronts across North and South Delhi. Major fugitive dust source 2024-26."
+  },
+  {
+    "source_id": 8,
+    "name": "Pragati Maidan Redevelopment / ITPO Complex",
+    "type": "Construction",
+    "lat": 28.6192,
+    "lon": 77.2414,
+    "intensity": 290,
+    "description": "Large-scale demolition and construction zone in central Delhi near India Gate."
+  }
+]

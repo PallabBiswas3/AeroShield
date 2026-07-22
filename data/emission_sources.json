@@ -1,0 +1,32 @@
+[
+  {
+    "source_id": 1,
+    "name": "Whitefield Infrastructure Project",
+    "type": "Construction",
+    "x": 12,
+    "y": 13,
+    "intensity": 520,
+    "lat": 13.0256,
+    "lon": 77.6446
+  },
+  {
+    "source_id": 2,
+    "name": "Peenya Metal Processing Grid",
+    "type": "Industrial Stack",
+    "x": 3,
+    "y": 10,
+    "intensity": 460,
+    "lat": 12.9986,
+    "lon": 77.5546
+  },
+  {
+    "source_id": 3,
+    "name": "Hebbal Thermal Cluster",
+    "type": "Industrial Stack",
+    "x": 7,
+    "y": 2,
+    "intensity": 310,
+    "lat": 12.9266,
+    "lon": 77.5946
+  }
+]
