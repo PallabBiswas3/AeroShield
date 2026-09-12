@@ -29,6 +29,9 @@ to end, every API endpoint, and known limitations/what's next.
 | **Source screening** (`app/ml/plume_math.py`) | Reverse Gaussian-plume ensemble ranks relative contribution hypotheses among the incomplete demonstration inventory. Shares are not calibrated source probabilities. |
 | **Uncertainty calibration** (`app/ml/uncertainty.py`) | Quantile estimates plus split-conformal calibration produce auditable nominal 90% PM2.5 bands. |
 | **Forecast weather** (`app/ml/weather.py`) | Loads and caches Open-Meteo wind and boundary-layer forecasts, with a visible fallback state. |
+| **Live operating context** (`app/live_context.py`) | Loads current PM2.5 plus a coarse 24-hour Open-Meteo/CAMS baseline, with memory and disk-cache states shown explicitly. |
+| **Satellite evidence** (`app/satellite.py`) | Loads NASA FIRMS VIIRS thermal anomalies and ranks them by distance and wind compatibility; requires `NASA_FIRMS_MAP_KEY` for live data. |
+| **Health advisories** (`app/health_advisory.py`) | Generates deterministic, reviewable English/Hindi messages for the public, sensitive groups, schools, and outdoor workers from the conservative interval bound. |
 | **Intervention optimizer** (`app/ml/intervention.py`) | Ranks field actions by a conservative, non-causal benefit proxy, cost, and response time; efficacy constants are scenario assumptions. |
 | **Verification agent** (`app/agents/orchestrator.py`) | A 2-node LangGraph pipeline (Planner → Drafter) backed by Groq/Llama-3 that drafts a field-verification brief. It falls back to conservative deterministic wording without `GROQ_API_KEY`. |
 | **Case persistence** (`app/db.py`) *(new)* | SQLite log of every dispatched enforcement case — survives page refresh/restart. |
@@ -232,6 +235,9 @@ finding and must not be used as the sole basis for enforcement.
 | `GET` | `/api/city-grid?hour=&day_of_week=&month=&wind_speed=&wind_direction=` | 15×15 grid of PM2.5 predictions + AQI category per cell |
 | `POST` | `/api/analyze-hotspot` | Runs plume attribution + real point prediction + enforcement agent for one lat/lon |
 | `GET` | `/api/model-info` | Returns `model_meta.json` (features, grid config, validation metrics) |
+| `GET` | `/api/live-context` | Current/coarse external PM2.5 context plus a 24-hour outlook and cache status |
+| `GET` | `/api/satellite-fires` | NASA FIRMS fire evidence or an explicit not-configured/cache state |
+| `POST` | `/api/health-advisory` | Deterministic English/Hindi group-specific health-risk messages |
 | `POST` | `/api/dispatch` | Persists a dispatched case to SQLite, returns `case_id` |
 | `GET` | `/api/cases?limit=50` | Lists recently dispatched cases |
 
@@ -255,6 +261,8 @@ finding and must not be used as the sole basis for enforcement.
 - Open-Meteo weather is live when available, but the PM2.5 estimator has not been
   trained for explicit 1–72 hour targets. Direct horizon labels and horizon-specific
   evaluation are required before claiming multi-hour forecasting.
+- The new 24-hour Open-Meteo/CAMS outlook is displayed only as a coarse external
+  operational baseline. It is not relabelled as AeroShield's hyperlocal forecast.
 - The source inventory is demonstration data and may omit real emitters; attribution
   outputs are conditional relative shares, not calibrated probabilities.
 - Intervention efficacy values are unvalidated scenario assumptions; displayed
@@ -269,6 +277,17 @@ finding and must not be used as the sole basis for enforcement.
   to produce release artifacts.
 
 Before merging, complete [`docs/VALIDATION_CHECKLIST.md`](docs/VALIDATION_CHECKLIST.md).
+
+### Optional live satellite setup
+
+Register for a NASA FIRMS MAP_KEY, then set it before starting the backend:
+
+```bash
+export NASA_FIRMS_MAP_KEY="your-key"
+```
+
+Without a key, `/api/satellite-fires` returns `mode=not_configured` (or the last
+valid disk cache). AeroShield never fabricates satellite detections for a demo.
 
 ---
 

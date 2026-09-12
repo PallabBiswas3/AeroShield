@@ -100,6 +100,10 @@ export default function App() {
   const [sliderHour, setSliderHour] = useState(new Date().getHours());
   const [showSources, setShowSources] = useState(true);
   const [showStations, setShowStations] = useState(true);
+  const [showFires, setShowFires] = useState(true);
+  const [liveContext, setLiveContext] = useState(null);
+  const [satelliteData, setSatelliteData] = useState({ fires: [], mode: 'loading' });
+  const [advisoryLanguage, setAdvisoryLanguage] = useState('EN');
 
   // ── Feature #2: Model meta ───────────────────────────────────────────────
   const [modelMeta, setModelMeta] = useState(null);
@@ -140,6 +144,12 @@ export default function App() {
       .then(r => { if (r.data.status === 'success') setModelMeta(r.data.meta); })
       .catch(() => { });
     fetchGridData(new Date().getHours(), formatDate(new Date()));
+    axios.get('/api/live-context')
+      .then(r => setLiveContext(r.data))
+      .catch(() => setLiveContext({ mode: 'unavailable', stale: true }));
+    axios.get('/api/satellite-fires')
+      .then(r => setSatelliteData(r.data))
+      .catch(() => setSatelliteData({ fires: [], mode: 'unavailable', stale: true }));
     // Initial load only; later forecasts are explicitly triggered by controls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -227,6 +237,10 @@ export default function App() {
         <h1 style={{ margin: 0, fontSize: '19px', letterSpacing: '3px', color: '#00ffcc', whiteSpace: 'nowrap', flexShrink: 0 }}>
           AEROSHIELD <span style={{ color: '#444', fontWeight: 300 }}>IQ</span><span style={{ fontSize: '10px', color: '#333', marginLeft: '8px' }}>DELHI v3 · UNCERTAINTY AWARE</span>
         </h1>
+        <div title={liveContext?.spatial_resolution_note || 'Operational data status'} style={{ padding: '4px 8px', borderRadius: '4px', border: `1px solid ${liveContext?.stale ? '#7a5b14' : '#126b57'}`, color: liveContext?.stale ? '#ffc857' : '#00ffcc', backgroundColor: liveContext?.stale ? '#241b07' : '#06231e', fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+          {liveContext?.mode === 'live' ? '● LIVE CONTEXT' : liveContext?.mode === 'memory_cache' ? '● LIVE · CACHED 15M' : '● FALLBACK MODE'}
+          {liveContext?.current?.pm25 != null && ` · PM2.5 ${Number(liveContext.current.pm25).toFixed(1)}`}
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, maxWidth: '420px' }}>
           <span style={{ fontSize: '11px', color: '#555', whiteSpace: 'nowrap' }}>Date</span>
           <input
@@ -259,6 +273,7 @@ export default function App() {
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
           <button onClick={() => setShowStations(v => !v)} style={{ padding: '4px 9px', fontSize: '11px', cursor: 'pointer', borderRadius: '4px', border: '1px solid #333', backgroundColor: showStations ? '#1a3a3a' : '#111', color: showStations ? '#00ffcc' : '#444' }}>Sensors</button>
           <button onClick={() => setShowSources(v => !v)} style={{ padding: '4px 9px', fontSize: '11px', cursor: 'pointer', borderRadius: '4px', border: '1px solid #333', backgroundColor: showSources ? '#3a1a1a' : '#111', color: showSources ? '#ff6060' : '#444' }}>Sources</button>
+          <button onClick={() => setShowFires(v => !v)} title={satelliteData?.mode === 'not_configured' ? 'Set NASA_FIRMS_MAP_KEY to enable live thermal anomalies' : `NASA FIRMS: ${satelliteData?.mode}`} style={{ padding: '4px 9px', fontSize: '11px', cursor: 'pointer', borderRadius: '4px', border: '1px solid #333', backgroundColor: showFires ? '#3a2508' : '#111', color: showFires ? '#ffb347' : '#444' }}>Satellite {satelliteData?.fires?.length || 0}</button>
           <button onClick={loadCases} style={{ padding: '4px 9px', fontSize: '11px', cursor: 'pointer', borderRadius: '4px', border: '1px solid #333', backgroundColor: showCaseLog ? '#1a1a3a' : '#111', color: showCaseLog ? '#66aaff' : '#444' }}>Cases</button>
           <button onClick={() => fetchGridData(forecastHour, forecastDate)} style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', backgroundColor: '#00ffcc', color: '#000', border: 'none', borderRadius: '4px' }}>{loading ? '⏳' : '⚡ Forecast'}</button>
         </div>
@@ -282,6 +297,11 @@ export default function App() {
           {showSources && EMISSION_SOURCES.map(src => (
             <CircleMarker key={`src-${src.id}`} center={[src.lat, src.lon]} radius={8} pathOptions={{ fillColor: '#ff3333', color: '#ff0000', weight: 2, fillOpacity: 0.75 }}>
               <Popup><div style={{ color: '#222' }}><strong style={{ color: '#cc0000' }}>⚠ {src.name}</strong><br />Type: {src.type}</div></Popup>
+            </CircleMarker>
+          ))}
+          {showFires && (satelliteData?.fires || []).map(fire => (
+            <CircleMarker key={`fire-${fire.id}`} center={[fire.lat, fire.lon]} radius={Math.min(12, 5 + Math.sqrt(Math.max(0, fire.frp || 0)))} pathOptions={{ fillColor: '#ff9f1c', color: '#ffe066', weight: 1.5, fillOpacity: 0.85 }}>
+              <Popup><div style={{ color: '#222' }}><strong style={{ color: '#c45100' }}>🛰 NASA FIRMS thermal anomaly</strong><br />Detected: {fire.detected_at}<br />FRP: {fire.frp ?? '—'} MW<br />Confidence: {fire.confidence ?? '—'}<br /><em>Screening evidence only</em></div></Popup>
             </CircleMarker>
           ))}
           {gridData.map(cell => (
@@ -355,6 +375,23 @@ export default function App() {
                   ))}
                 </div>
               )}
+              {mandateData.satellite_evidence && (
+                <div style={{ marginBottom: '12px', backgroundColor: '#171006', border: '1px solid #573811', padding: '9px 10px', borderRadius: '5px' }}>
+                  <div style={{ color: '#ffb347', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>🛰 Satellite evidence</div>
+                  <div style={{ color: '#aaa', fontSize: '11px' }}>{mandateData.satellite_evidence.provider} · {mandateData.satellite_evidence.mode} · {mandateData.satellite_evidence.ranked_thermal_anomalies.length} relevant anomalies</div>
+                  {mandateData.satellite_evidence.ranked_thermal_anomalies.slice(0, 2).map(fire => <div key={fire.id} style={{ color: '#7f6a4f', fontSize: '10px', marginTop: '4px' }}>{fire.distance_km} km · wind compatibility {(fire.wind_compatibility * 100).toFixed(0)}% · FRP {fire.frp ?? '—'}</div>)}
+                </div>
+              )}
+              {mandateData.health_advisory && (
+                <div style={{ marginBottom: '12px', backgroundColor: '#07101a', border: '1px solid #163d5d', padding: '10px', borderRadius: '5px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '7px' }}>
+                    <div style={{ color: '#5bbcff', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Public-health advisory · {mandateData.health_advisory.risk_level}</div>
+                    <div>{['EN', 'HI'].map(code => <button key={code} onClick={() => setAdvisoryLanguage(code)} style={{ marginLeft: '3px', padding: '2px 5px', fontSize: '9px', border: '1px solid #285577', borderRadius: '3px', background: advisoryLanguage === code ? '#174566' : '#081724', color: '#9bd6ff', cursor: 'pointer' }}>{code}</button>)}</div>
+                  </div>
+                  {Object.entries(mandateData.health_advisory.languages[advisoryLanguage] || {}).map(([group, message]) => <div key={group} style={{ color: '#9bb3c4', fontSize: '10px', lineHeight: 1.45, marginTop: '5px' }}><strong style={{ color: '#d2e8f5', textTransform: 'capitalize' }}>{group.replaceAll('_', ' ')}:</strong> {message}</div>)}
+                </div>
+              )}
+              {mandateData.workflow_timing && <div style={{ color: '#4d6f68', fontSize: '10px', marginBottom: '10px' }}>Signal → recommendation: <strong>{mandateData.workflow_timing.processing_seconds}s</strong> · system processing time</div>}
               {mandateData.automated_mandate?.escalation_level && (
                 <div style={{ marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>Escalation</div>
@@ -422,7 +459,7 @@ export default function App() {
 
         {/* ── Footer ────────────────────────────────────────────────────── */}
         <div style={{ position: 'absolute', bottom: '14px', left: '14px', backgroundColor: 'rgba(0,0,0,0.88)', padding: '7px 12px', borderRadius: '5px', border: '1px solid #1a1a1a', zIndex: 1000, fontSize: '10px', color: '#444' }}>
-          AeroShield IQ v3 · Delhi NCT conditional scenario · Conformal uncertainty · Human-in-the-loop
+          AeroShield IQ v4 preview · Live operational context · Satellite screening · Bilingual risk communication · Human-in-the-loop
           {aqiStats && (
             <span style={{ marginLeft: '10px' }}>Grid avg: <strong style={{ color: '#aaa' }}>{aqiStats.avgPm25} µg/m³ PM2.5</strong></span>
           )}

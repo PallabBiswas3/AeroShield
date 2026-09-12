@@ -12,8 +12,12 @@ from app.agents.orchestrator import generate_enforcement_mandate
 from app.ml.inference import get_grid_predictions, get_emission_sources, get_point_prediction, get_model_meta
 from app.ml.intervention import rank_interventions
 from app.ml.weather import get_forecast_weather
+from app.live_context import get_live_air_quality
+from app.satellite import get_satellite_fires, rank_fire_evidence
+from app.health_advisory import generate_health_advisory
 from app import db
-from datetime import datetime
+from datetime import datetime, timezone
+from time import perf_counter
 
 # Load environment variables
 load_dotenv()
@@ -57,7 +61,8 @@ class PredictionRequest(BaseModel):
 
 @app.post("/api/analyze-hotspot")
 async def analyze_hotspot(payload: PredictionRequest):
-    
+    analysis_started = perf_counter()
+    signal_received_at = datetime.now(timezone.utc).isoformat()
     hour = payload.hour if payload.hour is not None else datetime.now().hour
     day_of_week = payload.day_of_week if payload.day_of_week is not None else datetime.now().weekday()
 
@@ -110,6 +115,14 @@ async def analyze_hotspot(payload: PredictionRequest):
         exposed_population=payload.exposed_population,
         sensitive_sites=payload.sensitive_sites,
     )
+    satellite = get_satellite_fires()
+    fire_evidence = rank_fire_evidence(
+        payload.lat, payload.lon, payload.wind_direction, satellite.get("fires", [])
+    )[:5]
+    health_advisory = generate_health_advisory(
+        interval["lower"], interval["upper"], ward_name=f"Delhi grid cell {payload.cell_id}"
+    )
+    completed_at = datetime.now(timezone.utc).isoformat()
 
     return {
         "cell_id": payload.cell_id,
@@ -133,8 +146,56 @@ async def analyze_hotspot(payload: PredictionRequest):
             "human_approval_required": True,
         },
         "intervention_plan": intervention_plan,
+        "satellite_evidence": {
+            "provider": satellite.get("provider"),
+            "mode": satellite.get("mode"),
+            "stale": satellite.get("stale", True),
+            "fetched_at": satellite.get("fetched_at"),
+            "ranked_thermal_anomalies": fire_evidence,
+            "warning": "Thermal anomalies are screening context, not source-attribution ground truth.",
+        },
+        "health_advisory": health_advisory,
+        "workflow_timing": {
+            "signal_received_at": signal_received_at,
+            "recommendation_completed_at": completed_at,
+            "processing_seconds": round(perf_counter() - analysis_started, 3),
+            "comparison_scope": "System processing time only; no claim about real agency response time.",
+        },
         "automated_mandate": enforcement_data,
     }
+
+
+@app.get("/api/live-context")
+async def live_context(
+    lat: float = Query(default=28.628, ge=28.2, le=29.1),
+    lon: float = Query(default=77.209, ge=76.7, le=77.6),
+):
+    try:
+        return {"status": "success", **get_live_air_quality(lat, lon)}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/satellite-fires")
+async def satellite_fires():
+    return {"status": "success", **get_satellite_fires()}
+
+
+class AdvisoryRequest(BaseModel):
+    pm25_lower: float = Field(ge=0, le=500)
+    pm25_upper: float = Field(ge=0, le=500)
+    ward_name: str = Field(default="Selected Delhi grid", min_length=1, max_length=120)
+    languages: list[str] = Field(default_factory=lambda: ["EN", "HI"], min_length=1, max_length=2)
+
+
+@app.post("/api/health-advisory")
+async def health_advisory(payload: AdvisoryRequest):
+    try:
+        return {"status": "success", **generate_health_advisory(
+            payload.pm25_lower, payload.pm25_upper, payload.ward_name, payload.languages
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 @app.get("/api/city-grid")
 async def city_grid_status(
