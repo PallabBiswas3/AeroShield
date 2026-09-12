@@ -1,17 +1,23 @@
 # backend/main.py
 import os
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # Import our custom ML and Agent modules
-from app.ml.plume_math import calculate_source_attribution
+from app.ml.plume_math import calculate_source_attribution_ensemble
 from app.agents.orchestrator import generate_enforcement_mandate
 from app.ml.inference import get_grid_predictions, get_emission_sources, get_point_prediction, get_model_meta
+from app.ml.intervention import rank_interventions
+from app.ml.weather import get_forecast_weather
+from app.live_context import get_live_air_quality
+from app.satellite import get_satellite_fires, rank_fire_evidence
+from app.health_advisory import generate_health_advisory
 from app import db
-from datetime import datetime
+from datetime import datetime, timezone
+from time import perf_counter
 
 # Load environment variables
 load_dotenv()
@@ -23,29 +29,54 @@ app = FastAPI(title="AeroShield IQ Core Engine")
 def _startup():
     db.init_db()
 
-# Permit unrestricted operational data transit routes for local frontend dev iterations
+# Restrict browser access by default. Override with a comma-separated
+# AEROSHIELD_CORS_ORIGINS value when deploying the frontend elsewhere.
+cors_origins = [origin.strip() for origin in os.getenv(
+    "AEROSHIELD_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+@app.get("/api/health")
+async def health():
+    """Non-secret deployment readiness signal for hosts and demo operators."""
+    return {
+        "status": "ok",
+        "service": "aeroshield-api",
+        "integrations": {
+            "nasa_firms_configured": bool(os.getenv("NASA_FIRMS_MAP_KEY", "").strip()),
+            "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+        },
+    }
+
+
 class PredictionRequest(BaseModel):
     cell_id: int
-    lat: float
-    lon: float
-    wind_speed: float
-    wind_direction: float
-    hour: int | None = None
-    day_of_week: int | None = None
+    # The model was trained for the displayed Delhi grid. Reject geographic
+    # extrapolation instead of returning a precise-looking unsupported result.
+    lat: float = Field(ge=28.565, le=28.691)
+    lon: float = Field(ge=77.135, le=77.283)
+    wind_speed: float = Field(ge=0, le=75)
+    wind_direction: float = Field(ge=0, lt=360)
+    hour: int | None = Field(default=None, ge=0, le=23)
+    day_of_week: int | None = Field(default=None, ge=0, le=6)
+    month: int | None = Field(default=None, ge=1, le=12)
+    boundary_layer_height: float | None = Field(default=None, gt=0, le=5000)
+    exposed_population: int = Field(default=100_000, ge=0)
+    sensitive_sites: int = Field(default=0, ge=0)
 
 # --- ENDPOINTS ---
 
 @app.post("/api/analyze-hotspot")
 async def analyze_hotspot(payload: PredictionRequest):
-    
+    analysis_started = perf_counter()
+    signal_received_at = datetime.now(timezone.utc).isoformat()
     hour = payload.hour if payload.hour is not None else datetime.now().hour
     day_of_week = payload.day_of_week if payload.day_of_week is not None else datetime.now().weekday()
 
@@ -55,15 +86,18 @@ async def analyze_hotspot(payload: PredictionRequest):
     # 1. Compute plume back-propagation attribution profile
     #    (hour is passed through so the Pasquill stability class matches
     #    the one used to generate the prediction being explained)
-    attribution_results = calculate_source_attribution(
+    attribution_results = calculate_source_attribution_ensemble(
         hotspot_lat=payload.lat,
         hotspot_lon=payload.lon,
         wind_speed=payload.wind_speed,
         wind_dir_deg=payload.wind_direction,
         sources_list=real_emission_sources,
         hour=hour,
+        simulations=600,
     )
-    primary_culprit = attribution_results[0] if attribution_results else {"name": "Unknown Diffuse Source"}
+    primary_culprit = attribution_results[0] if attribution_results else {"name": "Unknown diffuse source"}
+    if primary_culprit.get("attribution_probability", 0.0) < 5.0:
+        primary_culprit = {**primary_culprit, "name": "Diffuse or unresolved source"}
 
     # 2. Get the model's actual predicted PM2.5/AQI for this exact point
     #    instead of a hardcoded placeholder.
@@ -71,27 +105,121 @@ async def analyze_hotspot(payload: PredictionRequest):
         lat=payload.lat, lon=payload.lon,
         wind_speed=payload.wind_speed, wind_direction=payload.wind_direction,
         hour=hour, day_of_week=day_of_week,
+        month=payload.month,
+        boundary_layer_height=payload.boundary_layer_height,
     )
-    predicted_aqi = point["predicted_pm25"]
+    predicted_pm25 = point["predicted_pm25"]
 
-    # 3. Trigger AI Agent compliance generation pipeline
+    interval = point.get("prediction_interval")
+    lower_bound = interval["lower"]
+    rank_stability = primary_culprit.get("rank_one_probability", 0.0)
+    action_gate = "FIELD_VERIFICATION" if interval is not None and lower_bound >= 90 and rank_stability >= 50 else "MONITOR_AND_VERIFY"
+
+    # 3. Draft a human-review brief. Source attribution alone is not legal proof.
     enforcement_data = generate_enforcement_mandate(
         cell_id=payload.cell_id,
-        aqi_value=predicted_aqi,
+        aqi_value=predicted_pm25,
         primary_violator=primary_culprit["name"],
         attribution_matrix=attribution_results # Pass full matrix to LangGraph
     )
 
+    intervention_plan = rank_interventions(
+        predicted_pm25=predicted_pm25,
+        attribution_results=attribution_results,
+        exposed_population=payload.exposed_population,
+        sensitive_sites=payload.sensitive_sites,
+    )
+    satellite = get_satellite_fires()
+    fire_evidence = rank_fire_evidence(
+        payload.lat, payload.lon, payload.wind_direction, satellite.get("fires", [])
+    )[:5]
+    health_advisory = generate_health_advisory(
+        interval["lower"], interval["upper"], ward_name=f"Delhi grid cell {payload.cell_id}"
+    )
+    completed_at = datetime.now(timezone.utc).isoformat()
+
     return {
         "cell_id": payload.cell_id,
-        "predicted_aqi": predicted_aqi,
+        # Kept for frontend compatibility; the value is a PM2.5 concentration,
+        # not an AQI index.
+        "predicted_aqi": predicted_pm25,
+        "predicted_pm25": predicted_pm25,
         "aqi_category": point["aqi_category"],
+        "prediction_interval": interval,
         "attribution_matrix": attribution_results,
-        "automated_mandate": enforcement_data
+        "attribution_quality": {
+            "method": "Monte Carlo reverse Gaussian plume",
+            "simulations": 600,
+            "inventory_scope": "Demonstration inventory; incomplete and not regulator-verified.",
+            "warning": "Shares are conditional on inventoried plume-compatible sources. They are screening evidence, not calibrated probabilities or proof of a violation.",
+        },
+        "decision_gate": {
+            "recommended_action": action_gate,
+            "forecast_lower_bound": lower_bound,
+            "top_source_rank_stability": rank_stability,
+            "human_approval_required": True,
+        },
+        "intervention_plan": intervention_plan,
+        "satellite_evidence": {
+            "provider": satellite.get("provider"),
+            "mode": satellite.get("mode"),
+            "stale": satellite.get("stale", True),
+            "fetched_at": satellite.get("fetched_at"),
+            "ranked_thermal_anomalies": fire_evidence,
+            "warning": "Thermal anomalies are screening context, not source-attribution ground truth.",
+        },
+        "health_advisory": health_advisory,
+        "workflow_timing": {
+            "signal_received_at": signal_received_at,
+            "recommendation_completed_at": completed_at,
+            "processing_seconds": round(perf_counter() - analysis_started, 3),
+            "comparison_scope": "System processing time only; no claim about real agency response time.",
+        },
+        "automated_mandate": enforcement_data,
     }
 
+
+@app.get("/api/live-context")
+async def live_context(
+    lat: float = Query(default=28.628, ge=28.2, le=29.1),
+    lon: float = Query(default=77.209, ge=76.7, le=77.6),
+):
+    try:
+        return {"status": "success", **get_live_air_quality(lat, lon)}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/satellite-fires")
+async def satellite_fires():
+    return {"status": "success", **get_satellite_fires()}
+
+
+class AdvisoryRequest(BaseModel):
+    pm25_lower: float = Field(ge=0, le=500)
+    pm25_upper: float = Field(ge=0, le=500)
+    ward_name: str = Field(default="Selected Delhi grid", min_length=1, max_length=120)
+    languages: list[str] = Field(default_factory=lambda: ["EN", "HI"], min_length=1, max_length=2)
+
+
+@app.post("/api/health-advisory")
+async def health_advisory(payload: AdvisoryRequest):
+    try:
+        return {"status": "success", **generate_health_advisory(
+            payload.pm25_lower, payload.pm25_upper, payload.ward_name, payload.languages
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 @app.get("/api/city-grid")
-async def city_grid_status(hour: int = 12, day_of_week: int = 1, month: int | None = None, wind_speed: float = 5.0, wind_direction: float = 120.0):
+async def city_grid_status(
+    hour: int = Query(default=12, ge=0, le=23),
+    day_of_week: int = Query(default=1, ge=0, le=6),
+    month: int | None = Query(default=None, ge=1, le=12),
+    wind_speed: float = Query(default=5.0, ge=0, le=75),
+    wind_direction: float = Query(default=120.0, ge=0, lt=360),
+    forecast_at: str | None = None,
+):
     """
     Returns full predictive spatial intelligence vectors for the frontend Mapbox renderer.
     `month` lets the frontend's date picker shift the seasonal features
@@ -99,19 +227,39 @@ async def city_grid_status(hour: int = 12, day_of_week: int = 1, month: int | No
     hour-of-day. Wind is still a manually-set baseline, not a real
     multi-day forecast — see README for what that would take.
     """
+    weather_note = None
+    boundary_layer_height = None
+    wind_source = "Manual meteorological fallback"
+    if forecast_at:
+        try:
+            requested = datetime.fromisoformat(forecast_at)
+            weather = get_forecast_weather(28.6280, 77.2090, requested)
+            if weather["wind_speed"] is not None:
+                wind_speed = weather["wind_speed"]
+            if weather["wind_direction"] is not None:
+                wind_direction = weather["wind_direction"]
+            boundary_layer_height = weather["boundary_layer_height"]
+            hour, day_of_week, month = requested.hour, requested.weekday(), requested.month
+            wind_source = weather["source"]
+        except Exception as exc:
+            weather_note = f"Live forecast unavailable; using fallback inputs ({exc})"
+
     try:
-        grid_data = get_grid_predictions(hour, day_of_week, wind_speed, wind_direction, month=month)
+        grid_data = get_grid_predictions(hour, day_of_week, wind_speed, wind_direction, month=month, boundary_layer_height=boundary_layer_height)
         
         # Package wind metadata so the frontend WindArrow renders correctly
         wind_meta = {
             "speed_ms": wind_speed,
             "direction_deg": wind_direction,
-            "source": "Live Meteorological Baseline"
+            "source": wind_source,
+            "forecast_at": forecast_at,
+            "fallback_note": weather_note,
         }
         
-        return {"status": "success", "grid": grid_data, "wind_meta": wind_meta}
+        return {"status": "success", "grid": grid_data, "wind_meta": wind_meta, "uncertainty_available": True,
+                "product_scope": "Conditional PM2.5 estimate using selected time/weather and fixed lag inputs; not validated as a multi-horizon forecast."}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @app.get("/api/model-info")
@@ -126,7 +274,7 @@ async def model_info():
         meta = get_model_meta()
         return {"status": "success", "meta": meta}
     except Exception as e:
-        return {"status": "error", "message": str(e), "meta": {}}
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 class DispatchRequest(BaseModel):
@@ -156,7 +304,7 @@ async def dispatch_case(payload: DispatchRequest):
         case_id = db.insert_case(payload.model_dump())
         return {"status": "success", "case_id": case_id}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail="Could not persist field-verification case") from e
 
 
 @app.get("/api/cases")
@@ -165,7 +313,7 @@ async def get_cases(limit: int = 50):
     try:
         return {"status": "success", "cases": db.list_cases(limit=limit)}
     except Exception as e:
-        return {"status": "error", "message": str(e), "cases": []}
+        raise HTTPException(status_code=500, detail="Could not list field-verification cases") from e
 
 # --- SERVER START ---
 
