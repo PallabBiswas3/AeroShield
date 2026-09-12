@@ -61,5 +61,16 @@ dates, and outputs in the PR before marking each item complete.
 - [ ] `cd frontend && npm ci && npm run lint && npm run build`
 - [ ] Start the API from a clean process and smoke-test `/api/model-info`,
   `/api/city-grid`, `/api/analyze-hotspot`, `/api/dispatch`, and `/api/cases`.
+- [ ] On Render, verify `/api/health` returns `status=ok` and
+  `nasa_firms_configured=true` without returning either secret value.
+- [ ] Verify the Vercel production origin is the only hosted origin in
+  `AEROSHIELD_CORS_ORIGINS`, and that `VITE_API_BASE_URL` contains only the public
+  Render origin—not the FIRMS or LLM key.
+- [ ] Force one failed FIRMS request and confirm the response contains only a
+  sanitized failure category; then restore the key and confirm `mode=live`.
+- [ ] Confirm the satellite timestamp, live/cache badge, map markers, and ranked
+  wind/distance evidence agree for the same request.
+- [ ] Restart/redeploy the Render service and disclose that the demo SQLite case
+  log and runtime caches are ephemeral unless a persistent disk/database is used.
 - [ ] Confirm no secrets, runtime cache, local database changes, or unrelated
   generated files are included in the final diff.

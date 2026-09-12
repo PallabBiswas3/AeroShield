@@ -20,8 +20,11 @@ backend/venv/
 # Environment files
 .env
 .env.*
+!.env.example
 backend/.env
 backend/.env.*
+!backend/.env.example
+!frontend/.env.example
 
 # Test and tooling caches
 .pytest_cache/

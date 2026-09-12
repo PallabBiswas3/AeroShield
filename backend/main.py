@@ -42,6 +42,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/api/health")
+async def health():
+    """Non-secret deployment readiness signal for hosts and demo operators."""
+    return {
+        "status": "ok",
+        "service": "aeroshield-api",
+        "integrations": {
+            "nasa_firms_configured": bool(os.getenv("NASA_FIRMS_MAP_KEY", "").strip()),
+            "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+        },
+    }
+
+
 class PredictionRequest(BaseModel):
     cell_id: int
     # The model was trained for the displayed Delhi grid. Reject geographic

@@ -291,5 +291,27 @@ valid disk cache). AeroShield never fabricates satellite detections for a demo.
 
 ---
 
+## Hosted demo: Vercel frontend + Render API
+
+Keep the browser and secret-bearing integrations separate:
+
+1. Create the Render service from `render.yaml`. In Render, set
+   `NASA_FIRMS_MAP_KEY` as a secret and set `AEROSHIELD_CORS_ORIGINS` to the exact
+   production Vercel origin (for example, `https://aeroshield.vercel.app`). Do not
+   expose the FIRMS key as a `VITE_*` variable.
+2. In Vercel, import this repository with **Root Directory** set to `frontend`.
+   Set `VITE_API_BASE_URL` to the Render service origin, without a trailing slash
+   (for example, `https://aeroshield-api.onrender.com`).
+3. Deploy Render first, confirm `GET /api/health` reports
+   `nasa_firms_configured: true`, and then deploy Vercel.
+4. Confirm `/api/satellite-fires` reports `mode: live` or an explicitly labelled
+   cached/unavailable state. The health endpoint exposes configuration booleans
+   only; it never returns secret values.
+
+Render's default filesystem is ephemeral, so the SQLite case log can reset after
+a redeploy or service restart. This is acceptable for the one-week demo but must
+be replaced with a managed database before claiming durable operational history.
+
 ## License
+
 MIT License.

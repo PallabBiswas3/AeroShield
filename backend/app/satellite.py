@@ -20,6 +20,18 @@ _ROOT = Path(__file__).resolve().parents[2]
 _CACHE_PATH = _ROOT / "data" / "runtime_cache" / "firms_delhi.json"
 
 
+def _safe_failure_reason(exc: Exception) -> str:
+    """Return an operator-useful category without exposing the key-bearing URL."""
+    if isinstance(exc, requests.Timeout):
+        return "NASA FIRMS request timed out"
+    if isinstance(exc, requests.HTTPError):
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        return f"NASA FIRMS returned HTTP {status}"
+    if isinstance(exc, requests.RequestException):
+        return "NASA FIRMS network request failed"
+    return "NASA FIRMS response could not be processed"
+
+
 def _read_cache() -> dict | None:
     try:
         return json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
@@ -75,10 +87,11 @@ def get_satellite_fires() -> dict:
             _write_cache(result)
             return result
         except Exception as exc:
+            safe_reason = _safe_failure_reason(exc)
             cached = _read_cache()
             if cached:
-                return {**cached, "mode": "disk_cache", "stale": True, "fallback_reason": str(exc)}
-            return {"fires": [], "mode": "unavailable", "stale": True, "provider": "NASA FIRMS", "reason": str(exc)}
+                return {**cached, "mode": "disk_cache", "stale": True, "fallback_reason": safe_reason}
+            return {"fires": [], "mode": "unavailable", "stale": True, "provider": "NASA FIRMS", "reason": safe_reason}
 
     cached = _read_cache()
     if cached:
