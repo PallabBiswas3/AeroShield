@@ -6,6 +6,7 @@ fastapi==0.111.0
 uvicorn==0.30.1
 pydantic==2.7.4
 python-dotenv==1.0.1
+httpx==0.27.2
 
 # ── ML & Data ─────────────────────────────────────────────────────────────────
 pandas==2.2.2
@@ -22,7 +23,7 @@ shapely==2.0.4
 # ── LLM / Agent framework ─────────────────────────────────────────────────────
 groq==0.9.0                  # kept for fallback compatibility
 langchain-groq==0.1.9        # LangChain wrapper for Groq
-langchain-core==0.2.10       # LangChain core primitives
+langchain-core==0.2.43       # Compatible with langchain-groq 0.1.9 and langgraph 0.1.14
 langgraph==0.1.14            # Multi-agent graph orchestration
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
