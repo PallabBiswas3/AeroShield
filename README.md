@@ -2,6 +2,13 @@
 
 **Transforming raw air quality data into proactive, actionable city intelligence.**
 
+> **v3 research upgrade:** AeroShield now uses chronological evaluation,
+> conformal prediction intervals, 600-run uncertainty-aware source attribution,
+> live forecast meteorology, conservative counterfactual intervention ranking,
+> and a human-approval gate. See
+> [`docs/RESEARCH_UPGRADE.md`](docs/RESEARCH_UPGRADE.md) for the research basis,
+> architecture, benchmark protocol, and honest limitations.
+
 Urban air pollution is a severe public health crisis, yet city authorities often rely on
 reactive advisories due to a lack of actionable intelligence. AeroShield IQ fuses open
 ground-sensor data, meteorological baselines, and AI to forecast hyperlocal pollution,
@@ -20,6 +27,9 @@ to end, every API endpoint, and known limitations/what's next.
 | **Data pipeline** (`pipeline/step1-3`) | Downloads a year of Delhi CPCB/DPCC sensor readings from OpenAQ, builds spatial layers (OSM road density, industrial/construction emission sources), joins Open-Meteo weather, engineers features, and trains a LightGBM surrogate model. |
 | **Forecasting** (`app/ml/inference.py`) | Serves PM2.5 predictions across a 15×15 grid over Delhi NCT, or for a single exact lat/lon (used when you click a hotspot). |
 | **Source attribution** (`app/ml/plume_math.py`) | Reverse Gaussian-plume dispersion model — given a hotspot and wind vector, ranks nearby industrial/construction sources by how likely each is to be the cause. |
+| **Uncertainty calibration** (`app/ml/uncertainty.py`) | Quantile forecasts plus split-conformal calibration produce auditable 90% PM2.5 bands. |
+| **Forecast weather** (`app/ml/weather.py`) | Loads and caches Open-Meteo wind and boundary-layer forecasts, with a visible fallback state. |
+| **Intervention optimizer** (`app/ml/intervention.py`) | Ranks field actions by conservative exposure reduction, cost, and response time; never treats screening evidence as proof. |
 | **Enforcement agent** (`app/agents/orchestrator.py`) | A 2-node LangGraph pipeline (Planner → Legal Drafter) backed by Groq/Llama-3 that triages severity against Indian environmental statutes and drafts a legal notice. Falls back to a deterministic rule-based version if no `GROQ_API_KEY` is set. |
 | **Case persistence** (`app/db.py`) *(new)* | SQLite log of every dispatched enforcement case — survives page refresh/restart. |
 | **Dashboard** (`frontend/src/App.jsx`) | React + Leaflet map: live PM2.5 heatmap, wind vector, sensor/source markers, date+hour forecast controls, and the enforcement sidebar. |
@@ -176,12 +186,14 @@ Open `http://localhost:5173`.
    weekday (`day_of_week`) features accordingly, so a winter weekday and a monsoon
    Sunday will show different pollution patterns even at the same hour.
 2. Click **⚡ Forecast** (or just release the slider/change the date) to refresh the grid.
-3. Click any **orange/red hotspot cell** to run reverse-plume attribution — the
-   sidebar shows the model's real predicted PM2.5 for that exact point, the ranked list
-   of probable industrial sources, and an AI-drafted enforcement mandate.
-4. Click **✓ Approve & Dispatch Field Squad** — this now POSTs to `/api/dispatch` and
+3. Click any **orange/red hotspot cell** to run 600-simulation reverse-plume attribution — the
+   sidebar shows the PM2.5 uncertainty band, source rank stability, and robust intervention options.
+4. Click **✓ Approve Field Verification** — this POSTs to `/api/dispatch` and
    saves the case to SQLite. Refreshing the page won't lose it; query it back via
    `GET /api/cases`.
+
+The generated brief is decision support for a human officer. It is not a legal
+finding and must not be used as the sole basis for enforcement.
 
 ---
 

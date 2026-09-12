@@ -1,5 +1,5 @@
 // frontend/src/App.jsx
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import axios from 'axios';
@@ -80,6 +80,7 @@ const DISPATCH_STATES = { IDLE: 'idle', SENT: 'sent', CONFIRMED: 'confirmed' };
 const hourLabel = (h) => `${h === 0 ? 12 : h > 12 ? h - 12 : h}:00 ${h < 12 ? 'AM' : 'PM'}`;
 const windCompass = (deg) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(deg / 45) % 8];
 const priorityColor = (p) => ({ CRITICAL: '#7f0000', HIGH: '#bf360c', MEDIUM: '#1b5e20' }[p] || '#333');
+const pythonWeekday = (date) => (date.getDay() + 6) % 7; // Monday=0, matching pandas/Python
 
 function formatDate(d) {
   return d.toISOString().split('T')[0];
@@ -118,19 +119,20 @@ export default function App() {
     fetchGridData(h, forecastDate);
   };
 
-  const fetchGridData = useCallback(async (hour, dateStr) => {
+  const fetchGridData = async (hour, dateStr) => {
     const h = hour ?? forecastHour;
     const d = dateStr ?? forecastDate;
     const dateObj = new Date(d + 'T00:00:00');
-    const dow = dateObj.getDay();
+    const dow = pythonWeekday(dateObj);
     const month = dateObj.getMonth() + 1;
     try {
       setLoading(true); setMandateData(null); setSelectedCell(null); setPlumeLine(null); setAgentError(null); setDispatchState(DISPATCH_STATES.IDLE);
-      const res = await axios.get('/api/city-grid', { params: { hour: h, day_of_week: dow, month: month } });
+      const forecastAt = `${d}T${String(h).padStart(2, '0')}:00:00`;
+      const res = await axios.get('/api/city-grid', { params: { hour: h, day_of_week: dow, month: month, forecast_at: forecastAt } });
       if (res.data.status === 'success') { setGridData(res.data.grid); setWindData(res.data.wind_meta); }
-    } catch (err) { alert("Backend offline.\nRun: cd backend && python main.py"); }
+    } catch { alert("Backend offline.\nRun: cd backend && python main.py"); }
     finally { setLoading(false); }
-  }, [forecastHour, forecastDate]);
+  };
 
   // Load model info on mount
   useEffect(() => {
@@ -138,6 +140,8 @@ export default function App() {
       .then(r => { if (r.data.status === 'success') setModelMeta(r.data.meta); })
       .catch(() => { });
     fetchGridData(new Date().getHours(), formatDate(new Date()));
+    // Initial load only; later forecasts are explicitly triggered by controls.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleHotspotClick = async (cell) => {
@@ -147,7 +151,7 @@ export default function App() {
     setPlumeLine(plumeTraceLine(cell.lat, cell.lon, windDir));
 
     const dateObj = new Date(forecastDate + 'T00:00:00');
-    const dow = dateObj.getDay();
+    const dow = pythonWeekday(dateObj);
     const month = dateObj.getMonth() + 1;
 
     try {
@@ -160,9 +164,10 @@ export default function App() {
         hour: forecastHour,
         day_of_week: dow,
         month: month,
+        boundary_layer_height: cell.boundary_layer_height,
       });
       setMandateData(res.data);
-    } catch (err) { setAgentError("Agent unreachable. Check backend logs."); }
+    } catch { setAgentError("Agent unreachable. Check backend logs."); }
     finally { setAnalyzing(false); }
   };
 
@@ -193,7 +198,7 @@ export default function App() {
           .then(r => { if (r.data.status === 'success') setCases(r.data.cases); })
           .catch(() => { });
       }
-    } catch (err) {
+    } catch {
       setDispatchState(DISPATCH_STATES.IDLE);
       alert('Failed to dispatch case. Check backend logs.');
     }
@@ -213,14 +218,14 @@ export default function App() {
   } : null;
 
   const modelBadge = modelMeta?.metrics
-    ? `Model: RMSE ${modelMeta.metrics.rmse} · MAE ${modelMeta.metrics.mae} · ±15µg/m³ ${modelMeta.metrics.within_15pct}%`
+    ? `Chronological test: RMSE ${modelMeta.metrics.rmse} · MAE ${modelMeta.metrics.mae}${modelMeta.metrics.interval_coverage != null ? ` · 90% band coverage ${(modelMeta.metrics.interval_coverage * 100).toFixed(0)}%` : ''}`
     : null;
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#0a0a0a', color: 'white', fontFamily: "'Inter','Segoe UI',sans-serif" }}>
       <div style={{ padding: '10px 20px', backgroundColor: '#000', borderBottom: '1px solid #1a1a1a', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 1000, gap: '14px', flexWrap: 'wrap' }}>
         <h1 style={{ margin: 0, fontSize: '19px', letterSpacing: '3px', color: '#00ffcc', whiteSpace: 'nowrap', flexShrink: 0 }}>
-          AEROSHIELD <span style={{ color: '#444', fontWeight: 300 }}>IQ</span><span style={{ fontSize: '10px', color: '#333', marginLeft: '8px' }}>DELHI v2</span>
+          AEROSHIELD <span style={{ color: '#444', fontWeight: 300 }}>IQ</span><span style={{ fontSize: '10px', color: '#333', marginLeft: '8px' }}>DELHI v3 · UNCERTAINTY AWARE</span>
         </h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, maxWidth: '420px' }}>
           <span style={{ fontSize: '11px', color: '#555', whiteSpace: 'nowrap' }}>Date</span>
@@ -261,8 +266,8 @@ export default function App() {
       <div style={{ flex: 1, position: 'relative' }}>
         {loading && (
           <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ color: '#00ffcc', fontSize: '16px', letterSpacing: '2px' }}>⚡ RUNNING NEURAL FORECAST</div>
-            <div style={{ color: '#555', fontSize: '12px' }}>LightGBM surrogate · {hourLabel(sliderHour)} · Delhi NCT</div>
+            <div style={{ color: '#00ffcc', fontSize: '16px', letterSpacing: '2px' }}>⚡ RUNNING PROBABILISTIC FORECAST</div>
+            <div style={{ color: '#555', fontSize: '12px' }}>Quantile ensemble + conformal calibration · {hourLabel(sliderHour)} · Delhi NCT</div>
           </div>
         )}
         <MapContainer center={[28.6280, 77.2090]} zoom={11} minZoom={10} maxZoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }} zoomControl={false}>
@@ -291,9 +296,9 @@ export default function App() {
           ))}
         </MapContainer>
 
-        {/* ── Enforcement Sidebar ─────────────────────────────────────────── */}
+        {/* ── Intervention Sidebar ───────────────────────────────────────── */}
         <div style={{ position: 'absolute', top: '14px', right: '14px', width: '365px', backgroundColor: 'rgba(6,6,6,0.97)', padding: '18px', borderRadius: '8px', border: '1px solid #1e1e1e', boxShadow: '0 4px 32px rgba(0,0,0,0.8)', zIndex: 1000, maxHeight: 'calc(100vh - 110px)', overflowY: 'auto' }}>
-          <h2 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#fff', borderBottom: '1px solid #1e1e1e', paddingBottom: '10px', letterSpacing: '1.5px', textTransform: 'uppercase' }}>⚡ Enforcement Agent</h2>
+          <h2 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#fff', borderBottom: '1px solid #1e1e1e', paddingBottom: '10px', letterSpacing: '1.5px', textTransform: 'uppercase' }}>⚡ Intervention Copilot</h2>
           <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginBottom: '12px' }}>
             {[['#00e676', 'Good'], ['#b2ff59', 'Satis.'], ['#ffee58', 'Mod.'], ['#ff9800', 'Poor'], ['#f44336', 'V.Poor'], ['#b71c1c', 'Severe']].map(([c, l]) => (
               <span key={l} style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: '#666' }}><span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: c, display: 'inline-block' }} />{l}</span>
@@ -301,7 +306,7 @@ export default function App() {
           </div>
           {!selectedCell && !analyzing && !showCaseLog && (
             <div>
-              <p style={{ color: '#444', fontSize: '12px', lineHeight: '1.7', marginBottom: '14px' }}>Drag the hour slider to forecast. Click any <span style={{ color: '#ff9800' }}>orange</span> or <span style={{ color: '#f44336' }}>red</span> grid cell to run reverse-plume attribution and generate a legal mandate.</p>
+              <p style={{ color: '#666', fontSize: '12px', lineHeight: '1.7', marginBottom: '14px' }}>Choose a forecast time, then click an <span style={{ color: '#ff9800' }}>orange</span> or <span style={{ color: '#f44336' }}>red</span> cell. AeroShield will quantify forecast uncertainty, test source-ranking stability, and recommend field-verification actions.</p>
               <div style={{ borderTop: '1px solid #111', paddingTop: '10px', fontSize: '11px', color: '#333', lineHeight: '2' }}><div>🔵 CPCB sensor stations</div><div>🔴 Industrial / construction sources</div><div>● LightGBM surrogate PM2.5 grid</div></div>
             </div>
           )}
@@ -309,7 +314,7 @@ export default function App() {
             <div style={{ textAlign: 'center', padding: '20px 0' }}>
               <div style={{ color: '#00ffcc', fontSize: '13px', marginBottom: '8px' }}>⟳ Running Reverse-Plume Math...</div>
               <div style={{ color: '#555', fontSize: '11px', fontStyle: 'italic', marginBottom: '6px' }}>Tracing wind vectors to Delhi industrial zones...</div>
-              <div style={{ color: '#666', fontSize: '11px' }}>LangGraph Planner → Legal Drafter → Groq Llama-3</div>
+              <div style={{ color: '#666', fontSize: '11px' }}>600 weather/inventory simulations → counterfactual ranking → human review</div>
             </div>
           )}
           {agentError && !analyzing && (
@@ -320,15 +325,33 @@ export default function App() {
           {mandateData && !analyzing && !showCaseLog && (
             <div>
               <div style={{ backgroundColor: '#100000', border: '1px solid #3a0000', padding: '11px', borderRadius: '6px', marginBottom: '12px' }}>
-                <div style={{ color: '#ff4444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>⚠ Primary Source Identified</div>
+                <div style={{ color: '#ff4444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>⚠ Highest-Ranked Source Hypothesis</div>
                 <div style={{ color: '#fff', fontSize: '14px', fontWeight: '600', marginBottom: '3px' }}>{mandateData.attribution_matrix[0]?.name || "Unknown Source"}</div>
-                <div style={{ color: '#ff8888', fontSize: '11px' }}>Confidence: <strong>{mandateData.attribution_matrix[0]?.confidence_score || 0}%</strong> · Distance: {mandateData.attribution_matrix[0]?.distance_km || '—'} km</div>
+                <div style={{ color: '#ff8888', fontSize: '11px' }}>Attribution weight: <strong>{mandateData.attribution_matrix[0]?.attribution_probability || 0}%</strong> · Rank-1 stability: <strong>{mandateData.attribution_matrix[0]?.rank_one_probability || 0}%</strong> · {mandateData.attribution_matrix[0]?.evidence_grade || 'weak'} evidence</div>
+                {mandateData.prediction_interval && <div style={{ color: '#aaa', fontSize: '11px', marginTop: '5px' }}>PM2.5 90% band: <strong>{mandateData.prediction_interval.lower}–{mandateData.prediction_interval.upper} µg/m³</strong></div>}
               </div>
               {mandateData.attribution_matrix.length > 1 && (
                 <div style={{ marginBottom: '12px' }}>
                   <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>Attribution Ranking</div>
                   {mandateData.attribution_matrix.slice(0, 4).map((src, i) => (
-                    <div key={src.source_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '3px 0', borderBottom: '1px solid #111', color: i === 0 ? '#ff8888' : '#444' }}><span>{i + 1}. {src.name}</span><span>{src.confidence_score}%</span></div>
+                    <div key={src.source_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '3px 0', borderBottom: '1px solid #111', color: i === 0 ? '#ff8888' : '#555' }}><span>{i + 1}. {src.name}</span><span>{src.attribution_probability}%</span></div>
+                  ))}
+                </div>
+              )}
+              {mandateData.decision_gate && (
+                <div style={{ marginBottom: '12px', backgroundColor: '#071414', border: '1px solid #16423d', padding: '9px 10px', borderRadius: '5px' }}>
+                  <div style={{ color: '#00ffcc', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Decision gate</div>
+                  <div style={{ color: '#bbb', fontSize: '11px' }}>{mandateData.decision_gate.recommended_action.replaceAll('_', ' ')} · Human approval required</div>
+                </div>
+              )}
+              {mandateData.intervention_plan?.ranked_actions?.length > 0 && (
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>Robust action ranking</div>
+                  {mandateData.intervention_plan.ranked_actions.slice(0, 3).map((action) => (
+                    <div key={action.source_id} style={{ backgroundColor: '#0b1111', borderLeft: '2px solid #00ffcc', padding: '7px 9px', marginBottom: '5px', fontSize: '11px' }}>
+                      <div style={{ color: '#bbb', lineHeight: '1.4' }}>{action.rank}. {action.action}</div>
+                      <div style={{ color: '#4f817b', marginTop: '3px' }}>Robust reduction: {action.robust_pm25_reduction} µg/m³ · verify on site</div>
+                    </div>
                   ))}
                 </div>
               )}
@@ -339,7 +362,7 @@ export default function App() {
                 </div>
               )}
               <div style={{ marginBottom: '10px' }}>
-                <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '3px' }}>Statute Violated</div>
+                <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '3px' }}>Legal framework for review</div>
                 <div style={{ color: '#bbb', fontSize: '12px' }}>{mandateData.automated_mandate.statute_violated}</div>
               </div>
               <div style={{ marginBottom: '10px' }}>
@@ -352,11 +375,11 @@ export default function App() {
                 </div>
               )}
               <div style={{ marginBottom: '14px' }}>
-                <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>Drafted Legal Notice</div>
+                <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>Draft field-verification brief</div>
                 <div style={{ color: '#888', fontSize: '11px', lineHeight: '1.65', fontStyle: 'italic', backgroundColor: '#080808', padding: '10px', borderRadius: '4px', border: '1px solid #161616', whiteSpace: 'pre-wrap', maxHeight: '130px', overflowY: 'auto' }}>{mandateData.automated_mandate.legal_notice_draft}</div>
               </div>
               {dispatchState === DISPATCH_STATES.IDLE && (
-                <button onClick={handleDispatch} style={{ width: '100%', padding: '11px', backgroundColor: '#00ffcc', color: '#000', border: 'none', borderRadius: '4px', fontWeight: '700', cursor: 'pointer', fontSize: '13px', letterSpacing: '0.5px' }}>✓ Approve & Dispatch Field Squad</button>
+                <button onClick={handleDispatch} style={{ width: '100%', padding: '11px', backgroundColor: '#00ffcc', color: '#000', border: 'none', borderRadius: '4px', fontWeight: '700', cursor: 'pointer', fontSize: '13px', letterSpacing: '0.5px' }}>✓ Approve Field Verification</button>
               )}
               {dispatchState === DISPATCH_STATES.SENT && (
                 <div style={{ width: '100%', padding: '11px', backgroundColor: '#111', color: '#00ffcc', border: '1px solid #00ffcc44', borderRadius: '4px', textAlign: 'center', fontSize: '12px' }}>⏳ Transmitting to Field Inspector...</div>
@@ -399,7 +422,7 @@ export default function App() {
 
         {/* ── Footer ────────────────────────────────────────────────────── */}
         <div style={{ position: 'absolute', bottom: '14px', left: '14px', backgroundColor: 'rgba(0,0,0,0.88)', padding: '7px 12px', borderRadius: '5px', border: '1px solid #1a1a1a', zIndex: 1000, fontSize: '10px', color: '#444' }}>
-          AeroShield IQ · Delhi NCT · LightGBM Surrogate · LangGraph + Groq Llama-3
+          AeroShield IQ v3 · Delhi NCT · Chronological validation · Conformal uncertainty · Human-in-the-loop
           {aqiStats && (
             <span style={{ marginLeft: '10px' }}>Grid avg: <strong style={{ color: '#aaa' }}>{aqiStats.avgPm25} µg/m³ PM2.5</strong></span>
           )}

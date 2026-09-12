@@ -34,7 +34,7 @@ def _get_llm():
         logger.warning(f"Failed to init ChatGroq: {e}")
         return None
 
-PLANNER_SYSTEM = """You are the AeroShield IQ Enforcement Planner Agent operating under the Environment Protection Act 1986 and Air Act 1981.
+PLANNER_SYSTEM = """You are the AeroShield IQ Field Verification Planner. Model-based source attribution is screening evidence, not proof of a violation. Never declare guilt, fabricate measurements, or claim a statute was violated. Identify potentially relevant legal provisions for a human officer to review.
 Respond ONLY with a valid JSON object. No markdown. Schema:
 {"escalation_level": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW", "applicable_statutes": ["Section X..."], "enforcement_brief": "..."}"""
 
@@ -43,7 +43,7 @@ def planner_node(state: EnforcementState) -> EnforcementState:
     if llm is None:
         aqi = state["aqi_value"]
         level = "CRITICAL" if aqi >= 400 else "HIGH" if aqi >= 200 else "MEDIUM" if aqi >= 100 else "LOW"
-        return {**state, "escalation_level": level, "applicable_statutes": ["Section 21 of Air Act, 1981"], "enforcement_brief": f"Violation at {state['primary_violator']}."}
+        return {**state, "escalation_level": level, "applicable_statutes": ["Air (Prevention and Control of Pollution) Act, 1981 — applicability requires officer review"], "enforcement_brief": f"Prioritise field verification near {state['primary_violator']}; do not treat the model output as a violation finding."}
 
     from langchain_core.messages import HumanMessage, SystemMessage
     prompt = f"Cell ID: {state['cell_id']}\nAQI: {state['aqi_value']:.1f}\nViolator: {state['primary_violator']}\nRanking: {json.dumps(state['attribution_matrix'][:3])}"
@@ -55,14 +55,14 @@ def planner_node(state: EnforcementState) -> EnforcementState:
     except Exception as e:
         return {**state, "escalation_level": "HIGH", "applicable_statutes": ["Section 21, Air Act 1981"], "enforcement_brief": "Fallback brief.", "error": str(e)}
 
-LEGAL_SYSTEM = """You are the DPCC Legal Compliance Agent.
+LEGAL_SYSTEM = """You draft a DPCC field-verification brief for human review. The evidence is probabilistic screening output, not legal proof. Do not issue a cease-and-desist order or state that a facility violated the law. Draft only an inspection request and list legal provisions as potentially relevant.
 Respond ONLY with a valid JSON object. No markdown. Schema:
 {"statute_violated": "...", "legal_notice_draft": "...", "dispatch_priority": "CRITICAL" | "HIGH" | "MEDIUM", "case_summary": "..."}"""
 
 def legal_drafter_node(state: EnforcementState) -> EnforcementState:
     llm = _get_llm()
     if llm is None:
-        return {**state, "statute_violated": "Section 21, Air Act 1981", "legal_notice_draft": f"Cease and desist issued to {state['primary_violator']}.", "dispatch_priority": state.get("escalation_level", "HIGH"), "case_summary": f"Field squad alert: violation at {state['primary_violator']}."}
+        return {**state, "statute_violated": "Potentially relevant: Air Act, 1981 (human legal review required)", "legal_notice_draft": f"Inspection request: verify emissions and control-equipment operation in the vicinity of {state['primary_violator']}. This model output is not a finding of violation.", "dispatch_priority": state.get("escalation_level", "HIGH"), "case_summary": f"Field verification recommended near {state['primary_violator']}; preserve measurements and document findings."}
 
     from langchain_core.messages import HumanMessage, SystemMessage
     brief_prompt = f"Brief:\n{state.get('enforcement_brief', '')}\nEscalation: {state.get('escalation_level', 'HIGH')}\nStatutes: {', '.join(state.get('applicable_statutes', []))}\nFacility: {state['primary_violator']}\nAQI: {state['aqi_value']:.1f}"

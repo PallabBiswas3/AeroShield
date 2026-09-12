@@ -1,15 +1,17 @@
 # backend/main.py
 import os
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # Import our custom ML and Agent modules
-from app.ml.plume_math import calculate_source_attribution
+from app.ml.plume_math import calculate_source_attribution_ensemble
 from app.agents.orchestrator import generate_enforcement_mandate
 from app.ml.inference import get_grid_predictions, get_emission_sources, get_point_prediction, get_model_meta
+from app.ml.intervention import rank_interventions
+from app.ml.weather import get_forecast_weather
 from app import db
 from datetime import datetime
 
@@ -34,12 +36,16 @@ app.add_middleware(
 
 class PredictionRequest(BaseModel):
     cell_id: int
-    lat: float
-    lon: float
-    wind_speed: float
-    wind_direction: float
-    hour: int | None = None
-    day_of_week: int | None = None
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    wind_speed: float = Field(ge=0, le=75)
+    wind_direction: float = Field(ge=0, lt=360)
+    hour: int | None = Field(default=None, ge=0, le=23)
+    day_of_week: int | None = Field(default=None, ge=0, le=6)
+    month: int | None = Field(default=None, ge=1, le=12)
+    boundary_layer_height: float | None = Field(default=None, gt=0, le=5000)
+    exposed_population: int = Field(default=100_000, ge=0)
+    sensitive_sites: int = Field(default=0, ge=0)
 
 # --- ENDPOINTS ---
 
@@ -55,15 +61,18 @@ async def analyze_hotspot(payload: PredictionRequest):
     # 1. Compute plume back-propagation attribution profile
     #    (hour is passed through so the Pasquill stability class matches
     #    the one used to generate the prediction being explained)
-    attribution_results = calculate_source_attribution(
+    attribution_results = calculate_source_attribution_ensemble(
         hotspot_lat=payload.lat,
         hotspot_lon=payload.lon,
         wind_speed=payload.wind_speed,
         wind_dir_deg=payload.wind_direction,
         sources_list=real_emission_sources,
         hour=hour,
+        simulations=600,
     )
     primary_culprit = attribution_results[0] if attribution_results else {"name": "Unknown Diffuse Source"}
+    if primary_culprit.get("attribution_probability", 0.0) < 5.0:
+        primary_culprit = {**primary_culprit, "name": "Diffuse or unresolved source"}
 
     # 2. Get the model's actual predicted PM2.5/AQI for this exact point
     #    instead of a hardcoded placeholder.
@@ -71,10 +80,17 @@ async def analyze_hotspot(payload: PredictionRequest):
         lat=payload.lat, lon=payload.lon,
         wind_speed=payload.wind_speed, wind_direction=payload.wind_direction,
         hour=hour, day_of_week=day_of_week,
+        month=payload.month,
+        boundary_layer_height=payload.boundary_layer_height,
     )
     predicted_aqi = point["predicted_pm25"]
 
-    # 3. Trigger AI Agent compliance generation pipeline
+    interval = point.get("prediction_interval")
+    lower_bound = interval["lower"] if interval else predicted_aqi
+    rank_stability = primary_culprit.get("rank_one_probability", 0.0)
+    action_gate = "FIELD_VERIFICATION" if interval is not None and lower_bound >= 90 and rank_stability >= 50 else "MONITOR_AND_VERIFY"
+
+    # 3. Draft a human-review brief. Source attribution alone is not legal proof.
     enforcement_data = generate_enforcement_mandate(
         cell_id=payload.cell_id,
         aqi_value=predicted_aqi,
@@ -82,16 +98,43 @@ async def analyze_hotspot(payload: PredictionRequest):
         attribution_matrix=attribution_results # Pass full matrix to LangGraph
     )
 
+    intervention_plan = rank_interventions(
+        predicted_pm25=predicted_aqi,
+        attribution_results=attribution_results,
+        exposed_population=payload.exposed_population,
+        sensitive_sites=payload.sensitive_sites,
+    )
+
     return {
         "cell_id": payload.cell_id,
         "predicted_aqi": predicted_aqi,
         "aqi_category": point["aqi_category"],
+        "prediction_interval": interval,
         "attribution_matrix": attribution_results,
-        "automated_mandate": enforcement_data
+        "attribution_quality": {
+            "method": "Monte Carlo reverse Gaussian plume",
+            "simulations": 600,
+            "warning": "Attribution probabilities are screening evidence, not proof of a violation.",
+        },
+        "decision_gate": {
+            "recommended_action": action_gate,
+            "forecast_lower_bound": lower_bound,
+            "top_source_rank_stability": rank_stability,
+            "human_approval_required": True,
+        },
+        "intervention_plan": intervention_plan,
+        "automated_mandate": enforcement_data,
     }
 
 @app.get("/api/city-grid")
-async def city_grid_status(hour: int = 12, day_of_week: int = 1, month: int | None = None, wind_speed: float = 5.0, wind_direction: float = 120.0):
+async def city_grid_status(
+    hour: int = Query(default=12, ge=0, le=23),
+    day_of_week: int = Query(default=1, ge=0, le=6),
+    month: int | None = Query(default=None, ge=1, le=12),
+    wind_speed: float = Query(default=5.0, ge=0, le=75),
+    wind_direction: float = Query(default=120.0, ge=0, lt=360),
+    forecast_at: str | None = None,
+):
     """
     Returns full predictive spatial intelligence vectors for the frontend Mapbox renderer.
     `month` lets the frontend's date picker shift the seasonal features
@@ -99,17 +142,36 @@ async def city_grid_status(hour: int = 12, day_of_week: int = 1, month: int | No
     hour-of-day. Wind is still a manually-set baseline, not a real
     multi-day forecast — see README for what that would take.
     """
+    weather_note = None
+    boundary_layer_height = None
+    wind_source = "Manual meteorological fallback"
+    if forecast_at:
+        try:
+            requested = datetime.fromisoformat(forecast_at)
+            weather = get_forecast_weather(28.6280, 77.2090, requested)
+            if weather["wind_speed"] is not None:
+                wind_speed = weather["wind_speed"]
+            if weather["wind_direction"] is not None:
+                wind_direction = weather["wind_direction"]
+            boundary_layer_height = weather["boundary_layer_height"]
+            hour, day_of_week, month = requested.hour, requested.weekday(), requested.month
+            wind_source = weather["source"]
+        except Exception as exc:
+            weather_note = f"Live forecast unavailable; using fallback inputs ({exc})"
+
     try:
-        grid_data = get_grid_predictions(hour, day_of_week, wind_speed, wind_direction, month=month)
+        grid_data = get_grid_predictions(hour, day_of_week, wind_speed, wind_direction, month=month, boundary_layer_height=boundary_layer_height)
         
         # Package wind metadata so the frontend WindArrow renders correctly
         wind_meta = {
             "speed_ms": wind_speed,
             "direction_deg": wind_direction,
-            "source": "Live Meteorological Baseline"
+            "source": wind_source,
+            "forecast_at": forecast_at,
+            "fallback_note": weather_note,
         }
         
-        return {"status": "success", "grid": grid_data, "wind_meta": wind_meta}
+        return {"status": "success", "grid": grid_data, "wind_meta": wind_meta, "uncertainty_available": bool(grid_data and grid_data[0].get("prediction_interval"))}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
