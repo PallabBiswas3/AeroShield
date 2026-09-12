@@ -1,5 +1,6 @@
 # backend/pipeline/step3_etl_and_train.py
-import os, json, time, requests, warnings
+import os, json, time, requests, warnings, hashlib, platform, io, glob
+from importlib.metadata import version
 import numpy as np
 import pandas as pd
 import joblib
@@ -26,6 +27,30 @@ MODEL_PATH        = os.path.join(DATA_DIR, "surrogate_model.joblib")
 META_PATH         = os.path.join(DATA_DIR, "model_meta.json")
 UQ_MODEL_PATH     = os.path.join(DATA_DIR, "uncertainty_models.joblib")
 MERGED_CSV_PATH   = os.path.join(DATA_DIR, "merged_training_data.csv")
+
+
+def _sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _dump_chunked_artifact(value, path: str, chunk_bytes: int = 500_000) -> list[str]:
+    """Write a compressed joblib as GitHub-API-friendly deterministic chunks."""
+    buffer = io.BytesIO()
+    joblib.dump(value, buffer, compress=9)
+    payload = buffer.getvalue()
+    for stale_path in glob.glob(f"{path}.part[0-9][0-9][0-9]"):
+        os.unlink(stale_path)
+    paths = []
+    for index, offset in enumerate(range(0, len(payload), chunk_bytes)):
+        part_path = f"{path}.part{index:03d}"
+        with open(part_path, "wb") as part_file:
+            part_file.write(payload[offset:offset + chunk_bytes])
+        paths.append(part_path)
+    return paths
 
 def load_and_pivot(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
@@ -57,11 +82,13 @@ def enrich_with_wind(df: pd.DataFrame) -> pd.DataFrame:
             sub = grp[["location_id", "datetime_hour"]].copy().merge(met, on="datetime_hour", how="left")
             if "wind_speed" in grp.columns and grp["wind_speed"].notna().mean() > 0.5:
                 sub["wind_speed_met"], sub["wind_dir_met"] = grp["wind_speed"].values, grp["wind_direction"].values
+            sub["weather_fallback"] = sub[["wind_speed_met", "wind_dir_met"]].isna().any(axis=1)
         except Exception:
             sub = grp[["location_id", "datetime_hour"]].copy()
             sub["wind_speed_met"] = grp["wind_speed"].values if "wind_speed" in grp.columns else np.nan
             sub["wind_dir_met"] = grp["wind_direction"].values if "wind_direction" in grp.columns else np.nan
             sub["blh_met"], sub["temp_met"], sub["rh_met"] = np.nan, np.nan, np.nan
+            sub["weather_fallback"] = True
         met_frames.append(sub)
         time.sleep(0.5)
 
@@ -110,11 +137,20 @@ def engineer_features(df: pd.DataFrame, sources: list) -> pd.DataFrame:
                 
     out["source_flux_log"] = np.log1p(flux) * (300.0 / np.maximum(out["boundary_layer_height"].values, 100.0)) * 5.0
     out["traffic_density"] = (out["road_density_m"] / 1000.0) * out.apply(lambda r: diurnal_traffic_factor(int(r["hour"]), int(r["day_of_week"])), axis=1) * 50
-    out["x"], out["y"] = ((out["longitude"] - out["longitude"].mean()) / 0.0105).round(1), ((out["latitude"] - out["latitude"].mean()) / 0.009).round(1)
+    # Fixed serving-grid origin; dataset means can change between downloads and
+    # would otherwise shift the feature coordinate system after every retrain.
+    out["x"] = ((out["longitude"] - 77.2090) / 0.0105).round(1)
+    out["y"] = ((out["latitude"] - 28.6280) / 0.009).round(1)
 
     # Past-only fill: backward filling here would leak a future measurement.
     out["pm25_filled"] = out.groupby("location_id")["pm25"].transform(lambda s: s.ffill(limit=3))
-    out["lag_1h_pm25"], out["lag_3h_pm25"] = out.groupby("location_id")["pm25_filled"].shift(1), out.groupby("location_id")["pm25_filled"].shift(3)
+    grouped = out.groupby("location_id", sort=False)
+    previous_value_1 = grouped["pm25_filled"].shift(1)
+    previous_time_1 = grouped["datetime_hour"].shift(1)
+    previous_value_3 = grouped["pm25_filled"].shift(3)
+    previous_time_3 = grouped["datetime_hour"].shift(3)
+    out["lag_1h_pm25"] = previous_value_1.where(out["datetime_hour"] - previous_time_1 == pd.Timedelta(hours=1))
+    out["lag_3h_pm25"] = previous_value_3.where(out["datetime_hour"] - previous_time_3 == pd.Timedelta(hours=3))
     for col in ["no2", "co", "pm10"]:
         if col in out.columns: out[col] = out.groupby("location_id")[col].transform(lambda s: s.ffill(limit=3))
     return out
@@ -144,11 +180,18 @@ def _quantile_model(alpha: float, rows: int):
 def main():
     if not os.path.exists(RAW_CSV_PATH):
         raise FileNotFoundError(f"raw OpenAQ data not found at {RAW_CSV_PATH}")
-    sources = json.load(open(SOURCES_PATH)) if os.path.exists(SOURCES_PATH) else []
+    if os.path.exists(SOURCES_PATH):
+        with open(SOURCES_PATH, encoding="utf-8") as source_file:
+            sources = json.load(source_file)
+    else:
+        sources = []
     df = engineer_features(merge_road_density(enrich_with_wind(load_and_pivot(RAW_CSV_PATH))), sources)
     df.to_csv(MERGED_CSV_PATH, index=False)
 
-    features = ["x", "y", "hour", "day_of_week", "month", "wind_speed", "wind_direction", "wind_sin", "wind_cos", "stability_class", "boundary_layer_height", "traffic_density", "source_flux_log", "lag_1h_pm25", "lag_3h_pm25"] + [f for f in ["no2", "co", "pm10"] if f in df.columns]
+    # Exclude contemporaneous co-pollutants. They are unavailable in the UI at
+    # prediction time (serving previously substituted constants), which inflated
+    # offline performance and created train/serve skew.
+    features = ["x", "y", "hour", "day_of_week", "month", "wind_speed", "wind_direction", "wind_sin", "wind_cos", "stability_class", "boundary_layer_height", "traffic_density", "source_flux_log", "lag_1h_pm25", "lag_3h_pm25"]
     candidate = df.dropna(subset=["datetime_hour", "pm25"]).sort_values("datetime_hour").copy()
     train, calibration, test, train_end, calibration_end = _chronological_blocks(candidate)
 
@@ -167,21 +210,17 @@ def main():
     X_cal, y_cal = calibration[features], calibration["pm25"]
     X_test, y_test = test[features], test["pm25"]
 
-    model = lgb.LGBMRegressor(
-        n_estimators=900, learning_rate=0.03, num_leaves=63, max_depth=8,
-        min_child_samples=max(10, len(train) // 300), subsample=0.8,
-        colsample_bytree=0.8, reg_alpha=0.1, reg_lambda=0.2,
-        objective="huber", alpha=0.9, n_jobs=-1, verbose=-1, random_state=42,
-    )
-    model.fit(X_train, y_train, eval_set=[(X_cal, y_cal)], callbacks=[lgb.early_stopping(60, verbose=False)])
-
     lower_model, median_model, upper_model = (_quantile_model(alpha, len(train)) for alpha in (0.10, 0.50, 0.90))
     for quantile_model in (lower_model, median_model, upper_model):
         quantile_model.fit(X_train, y_train)
     qhat = calibrate_interval(y_cal.values, lower_model.predict(X_cal), upper_model.predict(X_cal), coverage=0.90)
     test_lower, test_upper = apply_conformal(lower_model.predict(X_test), upper_model.predict(X_test), qhat)
 
-    predictions = np.clip(model.predict(X_test), 0.0, 500.0)
+    # The quantile median is both the served point estimate and the centre of
+    # the reported band. A separate Huber model previously produced points far
+    # outside its own intervals and weakened the persistence comparison.
+    model = median_model
+    predictions = np.clip(median_model.predict(X_test), 0.0, 500.0)
     persistence = np.clip(X_test["lag_1h_pm25"].to_numpy(), 0.0, 500.0)
     rmse = float(np.sqrt(mean_squared_error(y_test, predictions)))
     mae = float(mean_absolute_error(y_test, predictions))
@@ -194,10 +233,24 @@ def main():
     print(f"[step3] Chronological test — RMSE {rmse:.2f}, MAE {mae:.2f}, persistence RMSE {baseline_rmse:.2f}")
     print(f"[step3] 90% interval — coverage {uq_metrics['empirical_coverage']:.1%}, mean width {uq_metrics['mean_interval_width']:.2f}")
 
-    joblib.dump(model, MODEL_PATH)
-    joblib.dump({
+    training_data_sha256 = _sha256(RAW_CSV_PATH)
+    source_inventory_sha256 = _sha256(SOURCES_PATH) if os.path.exists(SOURCES_PATH) else None
+    artifact_provenance = {
+        "random_seed": 42,
+        "training_data_sha256": training_data_sha256,
+        "source_inventory_sha256": source_inventory_sha256,
+        "python": platform.python_version(),
+        "numpy": np.__version__, "pandas": pd.__version__,
+        "lightgbm": lgb.__version__,
+        "scikit_learn": version("scikit-learn"),
+        "joblib": joblib.__version__, "requests": requests.__version__,
+    }
+
+    _dump_chunked_artifact(model, MODEL_PATH)
+    _dump_chunked_artifact({
         "lower_model": lower_model, "median_model": median_model, "upper_model": upper_model,
         "qhat": qhat, "coverage": 0.90, "features": features,
+        "provenance": artifact_provenance,
     }, UQ_MODEL_PATH)
     with open(META_PATH, "w") as f:
         json.dump({
@@ -215,6 +268,13 @@ def main():
                 "split": "chronological_70_train_15_calibration_15_test",
                 "train_end": str(train_end), "calibration_end": str(calibration_end),
                 "target_interval_coverage": 0.90, "conformal_qhat": round(float(qhat), 4),
+                "product_scope": "conditional PM2.5 estimate; not a validated multi-horizon forecast",
+            },
+            "provenance": artifact_provenance,
+            "data_quality": {
+                "weather_fallback_fraction": round(float(df.get("weather_fallback", pd.Series(False, index=df.index)).mean()), 4),
+                "serving_uses_default_lags_unless_explicitly_supplied": True,
+                "contemporaneous_copollutants_excluded": True,
             },
             "best_iteration": int(model.best_iteration_) if getattr(model, "best_iteration_", None) else None,
             "train_rows": int(len(train)), "calibration_rows": int(len(calibration)), "test_rows": int(len(test)),

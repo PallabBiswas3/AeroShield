@@ -21,6 +21,13 @@ def _parse_local_hour(value: str) -> datetime:
 
 def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
     """Return forecast wind and mixing-height values nearest to ``when``."""
+    if when.tzinfo is not None:
+        # API timestamps are requested in Asia/Kolkata. Callers must provide a
+        # local wall-clock value or an aware datetime already in that zone;
+        # dropping another zone's offset would select the wrong forecast hour.
+        offset = when.utcoffset()
+        if offset is None or offset.total_seconds() != 19800:
+            raise ValueError("forecast time must be naive Asia/Kolkata local time or use UTC+05:30")
     key = (round(lat, 3), round(lon, 3))
     now = monotonic()
     with _LOCK:

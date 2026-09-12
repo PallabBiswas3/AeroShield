@@ -1,7 +1,7 @@
 # backend/main.py
 import os
 import uvicorn
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -25,10 +25,14 @@ app = FastAPI(title="AeroShield IQ Core Engine")
 def _startup():
     db.init_db()
 
-# Permit unrestricted operational data transit routes for local frontend dev iterations
+# Restrict browser access by default. Override with a comma-separated
+# AEROSHIELD_CORS_ORIGINS value when deploying the frontend elsewhere.
+cors_origins = [origin.strip() for origin in os.getenv(
+    "AEROSHIELD_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,8 +40,10 @@ app.add_middleware(
 
 class PredictionRequest(BaseModel):
     cell_id: int
-    lat: float = Field(ge=-90, le=90)
-    lon: float = Field(ge=-180, le=180)
+    # The model was trained for the displayed Delhi grid. Reject geographic
+    # extrapolation instead of returning a precise-looking unsupported result.
+    lat: float = Field(ge=28.565, le=28.691)
+    lon: float = Field(ge=77.135, le=77.283)
     wind_speed: float = Field(ge=0, le=75)
     wind_direction: float = Field(ge=0, lt=360)
     hour: int | None = Field(default=None, ge=0, le=23)
@@ -70,7 +76,7 @@ async def analyze_hotspot(payload: PredictionRequest):
         hour=hour,
         simulations=600,
     )
-    primary_culprit = attribution_results[0] if attribution_results else {"name": "Unknown Diffuse Source"}
+    primary_culprit = attribution_results[0] if attribution_results else {"name": "Unknown diffuse source"}
     if primary_culprit.get("attribution_probability", 0.0) < 5.0:
         primary_culprit = {**primary_culprit, "name": "Diffuse or unresolved source"}
 
@@ -83,23 +89,23 @@ async def analyze_hotspot(payload: PredictionRequest):
         month=payload.month,
         boundary_layer_height=payload.boundary_layer_height,
     )
-    predicted_aqi = point["predicted_pm25"]
+    predicted_pm25 = point["predicted_pm25"]
 
     interval = point.get("prediction_interval")
-    lower_bound = interval["lower"] if interval else predicted_aqi
+    lower_bound = interval["lower"]
     rank_stability = primary_culprit.get("rank_one_probability", 0.0)
     action_gate = "FIELD_VERIFICATION" if interval is not None and lower_bound >= 90 and rank_stability >= 50 else "MONITOR_AND_VERIFY"
 
     # 3. Draft a human-review brief. Source attribution alone is not legal proof.
     enforcement_data = generate_enforcement_mandate(
         cell_id=payload.cell_id,
-        aqi_value=predicted_aqi,
+        aqi_value=predicted_pm25,
         primary_violator=primary_culprit["name"],
         attribution_matrix=attribution_results # Pass full matrix to LangGraph
     )
 
     intervention_plan = rank_interventions(
-        predicted_pm25=predicted_aqi,
+        predicted_pm25=predicted_pm25,
         attribution_results=attribution_results,
         exposed_population=payload.exposed_population,
         sensitive_sites=payload.sensitive_sites,
@@ -107,14 +113,18 @@ async def analyze_hotspot(payload: PredictionRequest):
 
     return {
         "cell_id": payload.cell_id,
-        "predicted_aqi": predicted_aqi,
+        # Kept for frontend compatibility; the value is a PM2.5 concentration,
+        # not an AQI index.
+        "predicted_aqi": predicted_pm25,
+        "predicted_pm25": predicted_pm25,
         "aqi_category": point["aqi_category"],
         "prediction_interval": interval,
         "attribution_matrix": attribution_results,
         "attribution_quality": {
             "method": "Monte Carlo reverse Gaussian plume",
             "simulations": 600,
-            "warning": "Attribution probabilities are screening evidence, not proof of a violation.",
+            "inventory_scope": "Demonstration inventory; incomplete and not regulator-verified.",
+            "warning": "Shares are conditional on inventoried plume-compatible sources. They are screening evidence, not calibrated probabilities or proof of a violation.",
         },
         "decision_gate": {
             "recommended_action": action_gate,
@@ -171,9 +181,10 @@ async def city_grid_status(
             "fallback_note": weather_note,
         }
         
-        return {"status": "success", "grid": grid_data, "wind_meta": wind_meta, "uncertainty_available": bool(grid_data and grid_data[0].get("prediction_interval"))}
+        return {"status": "success", "grid": grid_data, "wind_meta": wind_meta, "uncertainty_available": True,
+                "product_scope": "Conditional PM2.5 estimate using selected time/weather and fixed lag inputs; not validated as a multi-horizon forecast."}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @app.get("/api/model-info")
@@ -188,7 +199,7 @@ async def model_info():
         meta = get_model_meta()
         return {"status": "success", "meta": meta}
     except Exception as e:
-        return {"status": "error", "message": str(e), "meta": {}}
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 class DispatchRequest(BaseModel):
@@ -218,7 +229,7 @@ async def dispatch_case(payload: DispatchRequest):
         case_id = db.insert_case(payload.model_dump())
         return {"status": "success", "case_id": case_id}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail="Could not persist field-verification case") from e
 
 
 @app.get("/api/cases")
@@ -227,7 +238,7 @@ async def get_cases(limit: int = 50):
     try:
         return {"status": "success", "cases": db.list_cases(limit=limit)}
     except Exception as e:
-        return {"status": "error", "message": str(e), "cases": []}
+        raise HTTPException(status_code=500, detail="Could not list field-verification cases") from e
 
 # --- SERVER START ---
 

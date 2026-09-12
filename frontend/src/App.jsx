@@ -266,8 +266,8 @@ export default function App() {
       <div style={{ flex: 1, position: 'relative' }}>
         {loading && (
           <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ color: '#00ffcc', fontSize: '16px', letterSpacing: '2px' }}>⚡ RUNNING PROBABILISTIC FORECAST</div>
-            <div style={{ color: '#555', fontSize: '12px' }}>Quantile ensemble + conformal calibration · {hourLabel(sliderHour)} · Delhi NCT</div>
+            <div style={{ color: '#00ffcc', fontSize: '16px', letterSpacing: '2px' }}>⚡ RUNNING UNCERTAINTY-AWARE ESTIMATE</div>
+            <div style={{ color: '#555', fontSize: '12px' }}>Conditional PM2.5 scenario + conformal band · {hourLabel(sliderHour)} · Delhi NCT</div>
           </div>
         )}
         <MapContainer center={[28.6280, 77.2090]} zoom={11} minZoom={10} maxZoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }} zoomControl={false}>
@@ -327,14 +327,14 @@ export default function App() {
               <div style={{ backgroundColor: '#100000', border: '1px solid #3a0000', padding: '11px', borderRadius: '6px', marginBottom: '12px' }}>
                 <div style={{ color: '#ff4444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>⚠ Highest-Ranked Source Hypothesis</div>
                 <div style={{ color: '#fff', fontSize: '14px', fontWeight: '600', marginBottom: '3px' }}>{mandateData.attribution_matrix[0]?.name || "Unknown Source"}</div>
-                <div style={{ color: '#ff8888', fontSize: '11px' }}>Attribution weight: <strong>{mandateData.attribution_matrix[0]?.attribution_probability || 0}%</strong> · Rank-1 stability: <strong>{mandateData.attribution_matrix[0]?.rank_one_probability || 0}%</strong> · {mandateData.attribution_matrix[0]?.evidence_grade || 'weak'} evidence</div>
+                <div style={{ color: '#ff8888', fontSize: '11px' }}>Conditional inventory share: <strong>{mandateData.attribution_matrix[0]?.attribution_share || 0}%</strong> · Rank-1 stability: <strong>{mandateData.attribution_matrix[0]?.rank_one_probability || 0}%</strong> · {mandateData.attribution_matrix[0]?.evidence_grade || 'weak'} evidence</div>
                 {mandateData.prediction_interval && <div style={{ color: '#aaa', fontSize: '11px', marginTop: '5px' }}>PM2.5 90% band: <strong>{mandateData.prediction_interval.lower}–{mandateData.prediction_interval.upper} µg/m³</strong></div>}
               </div>
               {mandateData.attribution_matrix.length > 1 && (
                 <div style={{ marginBottom: '12px' }}>
                   <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>Attribution Ranking</div>
                   {mandateData.attribution_matrix.slice(0, 4).map((src, i) => (
-                    <div key={src.source_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '3px 0', borderBottom: '1px solid #111', color: i === 0 ? '#ff8888' : '#555' }}><span>{i + 1}. {src.name}</span><span>{src.attribution_probability}%</span></div>
+                    <div key={src.source_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '3px 0', borderBottom: '1px solid #111', color: i === 0 ? '#ff8888' : '#555' }}><span>{i + 1}. {src.name}</span><span>{src.attribution_share}%</span></div>
                   ))}
                 </div>
               )}
@@ -350,7 +350,7 @@ export default function App() {
                   {mandateData.intervention_plan.ranked_actions.slice(0, 3).map((action) => (
                     <div key={action.source_id} style={{ backgroundColor: '#0b1111', borderLeft: '2px solid #00ffcc', padding: '7px 9px', marginBottom: '5px', fontSize: '11px' }}>
                       <div style={{ color: '#bbb', lineHeight: '1.4' }}>{action.rank}. {action.action}</div>
-                      <div style={{ color: '#4f817b', marginTop: '3px' }}>Robust reduction: {action.robust_pm25_reduction} µg/m³ · verify on site</div>
+                      <div style={{ color: '#4f817b', marginTop: '3px' }}>Conservative benefit proxy: {action.robust_benefit_proxy} · verify efficacy on site</div>
                     </div>
                   ))}
                 </div>
@@ -422,7 +422,7 @@ export default function App() {
 
         {/* ── Footer ────────────────────────────────────────────────────── */}
         <div style={{ position: 'absolute', bottom: '14px', left: '14px', backgroundColor: 'rgba(0,0,0,0.88)', padding: '7px 12px', borderRadius: '5px', border: '1px solid #1a1a1a', zIndex: 1000, fontSize: '10px', color: '#444' }}>
-          AeroShield IQ v3 · Delhi NCT · Chronological validation · Conformal uncertainty · Human-in-the-loop
+          AeroShield IQ v3 · Delhi NCT conditional scenario · Conformal uncertainty · Human-in-the-loop
           {aqiStats && (
             <span style={{ marginLeft: '10px' }}>Grid avg: <strong style={{ color: '#aaa' }}>{aqiStats.avgPm25} µg/m³ PM2.5</strong></span>
           )}

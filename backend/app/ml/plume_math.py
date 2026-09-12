@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 
 import numpy as np
 
@@ -57,6 +58,14 @@ def calculate_source_attribution_ensemble(
         hour = datetime.now().hour
     if simulations < 50:
         raise ValueError("simulations must be at least 50")
+    numeric_inputs = (hotspot_lat, hotspot_lon, wind_speed, wind_dir_deg,
+                      wind_direction_sigma, wind_speed_relative_sigma, source_intensity_sigma)
+    if not all(math.isfinite(float(value)) for value in numeric_inputs):
+        raise ValueError("attribution inputs must be finite")
+    if wind_speed < 0 or wind_direction_sigma < 0 or wind_speed_relative_sigma < 0 or source_intensity_sigma < 0:
+        raise ValueError("wind speed and uncertainty scales cannot be negative")
+    if not 0 <= hour <= 23:
+        raise ValueError("hour must be between 0 and 23")
     if not sources_list:
         return []
 
@@ -64,6 +73,7 @@ def calculate_source_attribution_ensemble(
     n_sources = len(sources_list)
     shares = np.zeros((simulations, n_sources), dtype=float)
     rank_one = np.zeros(n_sources, dtype=int)
+    active_simulations = 0
 
     for sample in range(simulations):
         sampled_direction = float(rng.normal(wind_dir_deg, wind_direction_sigma) % 360.0)
@@ -74,6 +84,7 @@ def calculate_source_attribution_ensemble(
         if total > 0:
             shares[sample] = raw / total
             rank_one[int(np.argmax(raw))] += 1
+            active_simulations += 1
 
     active = shares[np.sum(shares, axis=1) > 0]
     if active.size == 0:
@@ -84,15 +95,22 @@ def calculate_source_attribution_ensemble(
         probability = float(np.mean(distribution)) if distribution.size else 0.0
         p10 = float(np.quantile(distribution, 0.10)) if distribution.size else 0.0
         p90 = float(np.quantile(distribution, 0.90)) if distribution.size else 0.0
-        rank_probability = float(rank_one[index] / simulations * 100.0)
-        grade = "strong" if rank_probability >= 70 and p10 >= 20 else "moderate" if rank_probability >= 40 else "weak"
+        rank_probability = float(rank_one[index] / active_simulations * 100.0) if active_simulations else 0.0
+        active_fraction = active_simulations / simulations
+        grade = "strong" if active_fraction >= 0.8 and rank_probability >= 70 and p10 >= 20 else "moderate" if active_fraction >= 0.5 and rank_probability >= 40 else "weak"
         results.append({
             **source,
             "distance_km": round(haversine_km(hotspot_lat, hotspot_lon, source["lat"], source["lon"]), 2),
+            # These are relative shares conditional on at least one inventoried
+            # source being plume-compatible, not calibrated source probabilities.
+            "attribution_share": round(probability, 1),
             "attribution_probability": round(probability, 1), "probability_p10": round(p10, 1),
             "probability_p90": round(p90, 1), "rank_one_probability": round(rank_probability, 1),
             "confidence_score": round(probability, 1), "evidence_grade": grade,
+            "active_simulation_fraction": round(active_fraction, 3),
+            "active_simulations": active_simulations,
             "method": "Monte Carlo reverse Gaussian plume",
+            "interpretation": "Relative contribution share among inventoried sources, conditional on plume compatibility.",
         })
     return sorted(results, key=lambda item: item["attribution_probability"], reverse=True)
 

@@ -4,6 +4,8 @@ import json
 import numpy as np
 import pandas as pd
 import joblib
+import glob
+import io
 from datetime import datetime
 
 from app.ml.features import (
@@ -48,12 +50,26 @@ _road_grid   = None   # dict of numpy arrays: {"lat", "lon", "density"}
 _meta        = None
 _uq_bundle   = None
 
+
+def _load_artifact(path: str):
+    """Load a chunked release artifact, falling back to a legacy single file."""
+    parts = sorted(glob.glob(f"{path}.part[0-9][0-9][0-9]"))
+    if parts:
+        payload = bytearray()
+        for part_path in parts:
+            with open(part_path, "rb") as part_file:
+                payload.extend(part_file.read())
+        return joblib.load(io.BytesIO(payload))
+    if os.path.exists(path):
+        return joblib.load(path)
+    raise RuntimeError(f"[inference] model artifact not found at {path} or {path}.partNNN")
+
 def _ensure_loaded():
     global _model, _sources, _road_grid, _meta, _uq_bundle
     if _model is not None:
         return
 
-    if not os.path.exists(MODEL_PATH):
+    if not os.path.exists(MODEL_PATH) and not glob.glob(f"{MODEL_PATH}.part[0-9][0-9][0-9]"):
         # NOTE: we deliberately do NOT silently auto-train a synthetic
         # fallback model anymore. train.py's synthetic generator uses a
         # different feature/grid schema than the real Delhi pipeline
@@ -68,13 +84,13 @@ def _ensure_loaded():
             "  python pipeline/step3_etl_and_train.py"
         )
 
-    _model = joblib.load(MODEL_PATH)
+    model = _load_artifact(MODEL_PATH)
 
     if os.path.exists(SOURCES_PATH):
         with open(SOURCES_PATH) as f:
-            _sources = json.load(f)
+            sources = json.load(f)
     else:
-        _sources = []
+        sources = []
 
     if os.path.exists(ROAD_PATH):
         road_df = pd.read_csv(ROAD_PATH)
@@ -82,20 +98,36 @@ def _ensure_loaded():
         # indexing by cell_id — the road-density grid from step2 is built
         # at a different resolution (45x45) than the serving grid here
         # (15x15), so cell_id values are NOT comparable across the two.
-        _road_grid = {
+        road_grid = {
             "lat": road_df["lat"].to_numpy(dtype=float),
             "lon": road_df["lon"].to_numpy(dtype=float),
             "density": road_df["road_density_m"].to_numpy(dtype=float),
         }
     else:
-        _road_grid = None
+        road_grid = None
 
     if os.path.exists(META_PATH):
         with open(META_PATH) as f:
-            _meta = json.load(f)
+            meta = json.load(f)
+    else:
+        raise RuntimeError(f"[inference] model metadata not found at {META_PATH}")
 
-    if os.path.exists(UQ_MODEL_PATH):
-        _uq_bundle = joblib.load(UQ_MODEL_PATH)
+    if not os.path.exists(UQ_MODEL_PATH) and not glob.glob(f"{UQ_MODEL_PATH}.part[0-9][0-9][0-9]"):
+        raise RuntimeError(
+            f"[inference] uncertainty artifact not found at {UQ_MODEL_PATH}. "
+            "Run pipeline/step3_etl_and_train.py; v3 must not silently serve uncalibrated point estimates."
+        )
+    uq_bundle = _load_artifact(UQ_MODEL_PATH)
+    model_features = list(meta.get("features", []))
+    uq_features = list(uq_bundle.get("features", []))
+    if not model_features or model_features != uq_features:
+        raise RuntimeError("point-model metadata and uncertainty artifact use different feature schemas")
+    if meta.get("provenance") != uq_bundle.get("provenance"):
+        raise RuntimeError("point-model metadata and uncertainty artifact have different provenance")
+
+    # Assign globals only after every artifact has validated. This avoids a
+    # partially initialized process that would bypass checks on later calls.
+    _model, _sources, _road_grid, _meta, _uq_bundle = model, sources, road_grid, meta, uq_bundle
 
 def _source_flux_log(cell_x, cell_y, wind_speed, wind_rad, sc, blh_val, sources) -> float:
     total = 0.0
@@ -159,7 +191,9 @@ def get_grid_predictions(hour: int = 12, day_of_week: int = 1, wind_speed: float
     blh_val   = float(boundary_layer_height) if boundary_layer_height is not None else estimate_boundary_layer_height(hour, sc)
     wind_sin  = float(np.sin(np.radians(wind_direction)))
     wind_cos  = float(np.cos(np.radians(wind_direction)))
-    default_lag = lag_pm25 if lag_pm25 is not None else DELHI_MEDIANS.get("pm25_median", 41.1)
+    fill_values = (_meta or {}).get("feature_fill_values", {})
+    default_lag_1 = lag_pm25 if lag_pm25 is not None else float(fill_values.get("lag_1h_pm25", DELHI_MEDIANS["pm25_median"]))
+    default_lag_3 = lag_pm25 if lag_pm25 is not None else float(fill_values.get("lag_3h_pm25", DELHI_MEDIANS["pm25_median"]))
 
     records = []
     for cell_id in range(GRID_SIZE * GRID_SIZE):
@@ -179,7 +213,7 @@ def get_grid_predictions(hour: int = 12, day_of_week: int = 1, wind_speed: float
             "x": x_feat, "y": y_feat, "hour": hour, "day_of_week": day_of_week, "month": month,
             "wind_speed": wind_speed, "wind_direction": wind_direction, "wind_sin": wind_sin, "wind_cos": wind_cos,
             "stability_class": sc, "boundary_layer_height": blh_val, "traffic_density": traffic, "source_flux_log": flux,
-            "lag_1h_pm25": default_lag, "lag_3h_pm25": default_lag,
+            "lag_1h_pm25": default_lag_1, "lag_3h_pm25": default_lag_3,
             "no2": DELHI_MEDIANS["no2"], "co": DELHI_MEDIANS["co"], "pm10": DELHI_MEDIANS["pm10"],
             "_cell_id": cell_id, "_lat": round(cell_lat, 6), "_lon": round(cell_lon, 6),
         })
@@ -190,10 +224,8 @@ def get_grid_predictions(hour: int = 12, day_of_week: int = 1, wind_speed: float
 
     raw_preds = _model.predict(df[feature_cols])
     preds = np.clip(raw_preds, 0.0, 500.0)
-    interval_values = None
-    if _uq_bundle is not None:
-        lo, median, hi = predict_interval(_uq_bundle, df[feature_cols])
-        interval_values = (lo, median, hi)
+    lo, median, hi = predict_interval(_uq_bundle, df[feature_cols])
+    interval_values = (lo, median, hi)
 
     output = []
     for i, row in df.iterrows():
@@ -204,9 +236,8 @@ def get_grid_predictions(hour: int = 12, day_of_week: int = 1, wind_speed: float
             "aqi_category": _aqi_category(pm25), "wind_speed": wind_speed, "wind_direction": wind_direction,
             "stability_class": sc, "boundary_layer_height": round(blh_val, 0), "source_flux_log": round(float(row["source_flux_log"]), 2),
         }
-        if interval_values is not None:
-            lo, median, hi = interval_values
-            result["prediction_interval"] = {"lower": round(float(lo[i]), 1), "median": round(float(median[i]), 1), "upper": round(float(hi[i]), 1), "nominal_coverage": _uq_bundle.get("coverage", 0.9)}
+        lo, median, hi = interval_values
+        result["prediction_interval"] = {"lower": round(float(lo[i]), 1), "median": round(float(median[i]), 1), "upper": round(float(hi[i]), 1), "nominal_coverage": _uq_bundle.get("coverage", 0.9)}
         output.append(result)
     return output
 
@@ -225,7 +256,9 @@ def get_point_prediction(lat: float, lon: float, wind_speed: float, wind_directi
     wind_rad = np.radians((wind_direction + 180) % 360)
     sc       = stability_class(wind_speed, hour)
     blh_val  = float(boundary_layer_height) if boundary_layer_height is not None else estimate_boundary_layer_height(hour, sc)
-    default_lag = lag_pm25 if lag_pm25 is not None else DELHI_MEDIANS.get("pm25_median", 41.1)
+    fill_values = (_meta or {}).get("feature_fill_values", {})
+    default_lag_1 = lag_pm25 if lag_pm25 is not None else float(fill_values.get("lag_1h_pm25", DELHI_MEDIANS["pm25_median"]))
+    default_lag_3 = lag_pm25 if lag_pm25 is not None else float(fill_values.get("lag_3h_pm25", DELHI_MEDIANS["pm25_median"]))
 
     # Reuse the same x/y grid-cell coordinate convention as the training
     # pipeline (offset from grid centre in DEG_LAT/DEG_LON units) so the
@@ -248,7 +281,7 @@ def get_point_prediction(lat: float, lon: float, wind_speed: float, wind_directi
         "wind_speed": wind_speed, "wind_direction": wind_direction,
         "wind_sin": float(np.sin(np.radians(wind_direction))), "wind_cos": float(np.cos(np.radians(wind_direction))),
         "stability_class": sc, "boundary_layer_height": blh_val, "traffic_density": traffic, "source_flux_log": flux,
-        "lag_1h_pm25": default_lag, "lag_3h_pm25": default_lag,
+        "lag_1h_pm25": default_lag_1, "lag_3h_pm25": default_lag_3,
         "no2": DELHI_MEDIANS["no2"], "co": DELHI_MEDIANS["co"], "pm10": DELHI_MEDIANS["pm10"],
     }
     feature_cols = _meta["features"] if _meta and "features" in _meta else list(row.keys())
@@ -260,9 +293,8 @@ def get_point_prediction(lat: float, lon: float, wind_speed: float, wind_directi
         "wind_speed": wind_speed, "wind_direction": wind_direction,
         "stability_class": sc, "boundary_layer_height": round(blh_val, 0), "source_flux_log": round(flux, 2),
     }
-    if _uq_bundle is not None:
-        lo, median, hi = predict_interval(_uq_bundle, df[feature_cols])
-        result["prediction_interval"] = {"lower": round(float(lo[0]), 1), "median": round(float(median[0]), 1), "upper": round(float(hi[0]), 1), "nominal_coverage": _uq_bundle.get("coverage", 0.9)}
+    lo, median, hi = predict_interval(_uq_bundle, df[feature_cols])
+    result["prediction_interval"] = {"lower": round(float(lo[0]), 1), "median": round(float(median[0]), 1), "upper": round(float(hi[0]), 1), "nominal_coverage": _uq_bundle.get("coverage", 0.9)}
     return result
 
 def get_emission_sources() -> list:

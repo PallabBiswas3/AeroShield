@@ -3,17 +3,17 @@
 **Transforming raw air quality data into proactive, actionable city intelligence.**
 
 > **v3 research upgrade:** AeroShield now uses chronological evaluation,
-> conformal prediction intervals, 600-run uncertainty-aware source attribution,
-> live forecast meteorology, conservative counterfactual intervention ranking,
+> conformal uncertainty bands, 600-run uncertainty-aware plume screening,
+> live forecast meteorology, conservative intervention triage,
 > and a human-approval gate. See
 > [`docs/RESEARCH_UPGRADE.md`](docs/RESEARCH_UPGRADE.md) for the research basis,
 > architecture, benchmark protocol, and honest limitations.
 
 Urban air pollution is a severe public health crisis, yet city authorities often rely on
 reactive advisories due to a lack of actionable intelligence. AeroShield IQ fuses open
-ground-sensor data, meteorological baselines, and AI to forecast hyperlocal pollution,
-pinpoint industrial culprits via reverse-plume dispersion modelling, and auto-draft
-enforcement mandates for review and dispatch.
+ground-sensor data, meteorological inputs, and ML to estimate hyperlocal pollution,
+rank inventoried source hypotheses via reverse-plume dispersion modelling, and draft
+field-verification briefs for human review.
 
 This README covers: what's implemented, how the pieces fit together, how to run it end
 to end, every API endpoint, and known limitations/what's next.
@@ -25,12 +25,12 @@ to end, every API endpoint, and known limitations/what's next.
 | Layer | What it does |
 |---|---|
 | **Data pipeline** (`pipeline/step1-3`) | Downloads a year of Delhi CPCB/DPCC sensor readings from OpenAQ, builds spatial layers (OSM road density, industrial/construction emission sources), joins Open-Meteo weather, engineers features, and trains a LightGBM surrogate model. |
-| **Forecasting** (`app/ml/inference.py`) | Serves PM2.5 predictions across a 15×15 grid over Delhi NCT, or for a single exact lat/lon (used when you click a hotspot). |
-| **Source attribution** (`app/ml/plume_math.py`) | Reverse Gaussian-plume dispersion model — given a hotspot and wind vector, ranks nearby industrial/construction sources by how likely each is to be the cause. |
-| **Uncertainty calibration** (`app/ml/uncertainty.py`) | Quantile forecasts plus split-conformal calibration produce auditable 90% PM2.5 bands. |
+| **Conditional estimation** (`app/ml/inference.py`) | Serves PM2.5 scenario estimates across a 15×15 Delhi grid or at a clicked point. This is not yet a validated multi-horizon forecast. |
+| **Source screening** (`app/ml/plume_math.py`) | Reverse Gaussian-plume ensemble ranks relative contribution hypotheses among the incomplete demonstration inventory. Shares are not calibrated source probabilities. |
+| **Uncertainty calibration** (`app/ml/uncertainty.py`) | Quantile estimates plus split-conformal calibration produce auditable nominal 90% PM2.5 bands. |
 | **Forecast weather** (`app/ml/weather.py`) | Loads and caches Open-Meteo wind and boundary-layer forecasts, with a visible fallback state. |
-| **Intervention optimizer** (`app/ml/intervention.py`) | Ranks field actions by conservative exposure reduction, cost, and response time; never treats screening evidence as proof. |
-| **Enforcement agent** (`app/agents/orchestrator.py`) | A 2-node LangGraph pipeline (Planner → Legal Drafter) backed by Groq/Llama-3 that triages severity against Indian environmental statutes and drafts a legal notice. Falls back to a deterministic rule-based version if no `GROQ_API_KEY` is set. |
+| **Intervention optimizer** (`app/ml/intervention.py`) | Ranks field actions by a conservative, non-causal benefit proxy, cost, and response time; efficacy constants are scenario assumptions. |
+| **Verification agent** (`app/agents/orchestrator.py`) | A 2-node LangGraph pipeline (Planner → Drafter) backed by Groq/Llama-3 that drafts a field-verification brief. It falls back to conservative deterministic wording without `GROQ_API_KEY`. |
 | **Case persistence** (`app/db.py`) *(new)* | SQLite log of every dispatched enforcement case — survives page refresh/restart. |
 | **Dashboard** (`frontend/src/App.jsx`) | React + Leaflet map: live PM2.5 heatmap, wind vector, sensor/source markers, date+hour forecast controls, and the enforcement sidebar. |
 
@@ -213,15 +213,15 @@ finding and must not be used as the sole basis for enforcement.
 - New endpoint `GET /api/model-info` surfaces this.
 - The dashboard footer now shows e.g. `Model: RMSE 11.8 · MAE 8.0 · ±15µg/m³ 78.3%`.
 
-### Feature 3 — Date + hour forecast
+### Feature 3 — Date + hour conditional scenario
 - The header now has a date picker next to the hour slider.
 - `day_of_week` and `month` are derived from the picked date and sent to
   `GET /api/city-grid`, so seasonal effects (e.g. winter stubble-burning peaks vs.
-  monsoon washout) and weekday/weekend traffic patterns actually shift the forecast.
-- **Honest caveat:** wind speed/direction are still a manually-set baseline, not a real
-  multi-day weather forecast — picking a date 3 days out changes the model's seasonal
-  and weekday features correctly, but doesn't fetch a genuine future wind forecast for
-  that date. See §10 for what a full fix would need.
+  monsoon washout) and weekday/weekend traffic patterns shift the estimate.
+- Open-Meteo supplies forecast wind and boundary-layer height when available; the API
+  exposes a fallback note otherwise. Because fixed/default lag values are used and no
+  direct future-horizon targets were validated, this remains a conditional scenario,
+  not a validated multi-day PM2.5 forecast.
 
 ---
 
@@ -239,7 +239,7 @@ finding and must not be used as the sole basis for enforcement.
 ```json
 {
   "cell_id": 112,
-  "lat": 28.735, "lon": 77.15,
+  "lat": 28.630, "lon": 77.210,
   "wind_speed": 4.0, "wind_direction": 315.0,
   "hour": 21, "day_of_week": 3
 }
@@ -252,19 +252,23 @@ finding and must not be used as the sole basis for enforcement.
 
 ## 10. Known limitations / honest next steps
 
-- **Wind is still a manual baseline**, not pulled from a real forecast for the selected
-  future date. A proper fix: call Open-Meteo's *forecast* (not archive) endpoint for the
-  picked date and feed real predicted wind into `/api/city-grid`.
+- Open-Meteo weather is live when available, but the PM2.5 estimator has not been
+  trained for explicit 1–72 hour targets. Direct horizon labels and horizon-specific
+  evaluation are required before claiming multi-hour forecasting.
+- The source inventory is demonstration data and may omit real emitters; attribution
+  outputs are conditional relative shares, not calibrated probabilities.
+- Intervention efficacy values are unvalidated scenario assumptions; displayed
+  benefit values are prioritization proxies, not causal reductions.
 - **`train.py`'s Bangalore synthetic model** is dead weight kept only as a quick
   local-dev sanity trainer — consider deleting it or rewriting it to match the real
   Delhi feature schema if you still want a synthetic fallback.
-- **No auth** on any endpoint and `CORS` is wide open (`allow_origins=["*"]`) — fine
-  for local dev, must be locked down before any real deployment.
-- **`/api/cases` has no UI yet** — the data is there (and query-able), but there's no
-  "case log" panel in the dashboard to browse past dispatches.
-- The three duplicated implementations of `traffic_density`/diurnal-factor logic
-  (in `train.py`, `step3_etl_and_train.py`, and `inference.py`) still aren't
-  consolidated into one shared module — flagged previously, not yet addressed.
+- **No authentication** is implemented. CORS defaults to the two local Vite
+  origins and can be configured with `AEROSHIELD_CORS_ORIGINS`; authentication
+  and authorization are still required before any real deployment.
+- `app/ml/train.py` still contains legacy synthetic feature logic and must not be used
+  to produce release artifacts.
+
+Before merging, complete [`docs/VALIDATION_CHECKLIST.md`](docs/VALIDATION_CHECKLIST.md).
 
 ---
 

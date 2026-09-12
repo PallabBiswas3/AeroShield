@@ -13,6 +13,8 @@ class InterventionTests(unittest.TestCase):
         self.assertEqual(result["ranked_actions"][0]["source_id"], 1)
         self.assertTrue(all(action["requires_field_verification"] for action in result["ranked_actions"]))
         self.assertLessEqual(result["recommended_portfolio"]["post_action_pm25"], 150)
+        self.assertIn("efficacy_values", result["assumptions"])
+        self.assertIn("benefit", result["disclaimer"].lower())
 
     def test_no_excess_means_no_predicted_reduction(self):
         sources = [{"source_id": 1, "name": "Factory", "type": "Industrial Stack", "attribution_probability": 100, "probability_p10": 100}]

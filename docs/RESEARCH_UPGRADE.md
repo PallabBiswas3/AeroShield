@@ -15,8 +15,18 @@ The checked-in source inventory is also a demonstration inventory rather than
 a regulator-verified emissions inventory. It must be replaced or independently
 validated before any real-world attribution evaluation.
 
-Version 3 changes the project from a forecasting dashboard into an
+Version 3 changes the project from a deterministic dashboard into an
 **uncertainty-aware intervention decision-support system**.
+
+### Product scope (important)
+
+The current model is a **conditional PM2.5 scenario estimator**. It combines a
+selected time, forecast meteorology, spatial proxies, and fixed/default lag
+inputs. It has not been trained and evaluated with direct future targets for
+each selectable horizon. Accordingly, the UI and documentation must not call
+the PM2.5 output a validated multi-hour forecast. Open-Meteo inputs may be
+future forecasts; that does not by itself make the PM2.5 model a future-horizon
+forecaster.
 
 ## Implemented architecture
 
@@ -47,7 +57,12 @@ flowchart TD
 
 The test set is never used for early stopping or conformal calibration.
 
-### 2. Calibrated probabilistic forecasts
+Release models are stored as compressed `.partNNN` joblib chunks so each file
+can be transported through the repository API. `inference.py` concatenates
+parts in lexical order and validates feature schema and provenance before
+serving; it falls back to a legacy single joblib only when no chunks exist.
+
+### 2. Calibrated uncertainty bands for conditional estimates
 
 Three LightGBM quantile models estimate the 10th, 50th, and 90th percentiles.
 A held-out calibration block expands the lower/upper band using split conformal
@@ -63,23 +78,29 @@ intervals.
 
 ### 3. Probabilistic source attribution
 
-`app/ml/plume_math.py` samples uncertainty in:
+`app/ml/plume_math.py` samples assumed uncertainty in:
 
 - wind direction;
 - wind speed; and
 - source inventory intensity.
 
 Each of 600 simulations produces normalized source contributions. The API then
-returns the mean contribution, 10th–90th percentile range, probability of being
-ranked first, and an evidence grade. These values are explicitly described as
-screening evidence—not proof of a statutory violation.
+returns the mean relative contribution share, 10th–90th percentile range,
+conditional rank-one frequency, and an evidence grade. These are conditional
+on at least one inventoried source being plume-compatible. They are not
+calibrated source probabilities, and the inventory is incomplete demonstration
+data. The outputs are screening evidence—not proof of a statutory violation.
 
 ### 4. Counterfactual intervention ranking
 
-`app/ml/intervention.py` ranks source-specific actions by conservative PM2.5
-reduction, exposed population, sensitive sites, cost, and lead time. The lower
+`app/ml/intervention.py` ranks source-specific actions by a conservative benefit
+proxy, exposed population, sensitive sites, cost, and lead time. The lower
 attribution quantile is used for the robust score, so an unstable source ranking
 cannot dominate merely because its mean is high.
+
+The action efficacy constants are unvalidated scenario assumptions. Therefore,
+the displayed benefit is not a causal PM2.5 reduction prediction and the
+portfolio post-action concentration is illustrative only.
 
 All actions require field verification. The language agent drafts an inspection
 brief; it no longer declares a facility guilty or issues an autonomous legal

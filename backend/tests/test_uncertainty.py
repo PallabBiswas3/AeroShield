@@ -19,6 +19,15 @@ class UncertaintyTests(unittest.TestCase):
         self.assertEqual(float(lo[0]), 0.0)
         self.assertEqual(float(hi[0]), 500.0)
 
+    def test_crossed_quantiles_are_ordered_before_expansion(self):
+        lo, hi = apply_conformal(np.array([20.0]), np.array([10.0]), 2.0)
+        self.assertEqual(float(lo[0]), 8.0)
+        self.assertEqual(float(hi[0]), 22.0)
+
+    def test_nonfinite_calibration_is_rejected(self):
+        with self.assertRaises(ValueError):
+            calibrate_interval(np.array([1.0, np.nan]), np.zeros(2), np.ones(2))
+
 
 if __name__ == "__main__":
     unittest.main()
