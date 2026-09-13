@@ -52,6 +52,7 @@ async def health():
         "integrations": {
             "nasa_firms_configured": bool(os.getenv("NASA_FIRMS_MAP_KEY", "").strip()),
             "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+            "llm_drafting_enabled": os.getenv("AEROSHIELD_ENABLE_LLM", "false").strip().lower() in {"1", "true", "yes", "on"},
         },
     }
 

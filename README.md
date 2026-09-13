@@ -308,6 +308,12 @@ Keep the browser and secret-bearing integrations separate:
    cached/unavailable state. The health endpoint exposes configuration booleans
    only; it never returns secret values.
 
+For the hosted demo, keep `AEROSHIELD_ENABLE_LLM=false` (the default). The
+reviewed deterministic LangGraph templates produce the field-verification brief
+without two blocking LLM calls, making the workflow faster and reproducible. Set
+it to `true` only when explicitly demonstrating Groq drafting and disclose the
+additional latency and nondeterminism.
+
 Render's default filesystem is ephemeral, so the SQLite case log can reset after
 a redeploy or service restart. This is acceptable for the one-week demo but must
 be replaced with a managed database before claiming durable operational history.

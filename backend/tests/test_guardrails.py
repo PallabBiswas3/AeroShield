@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.agents.orchestrator import generate_enforcement_mandate, legal_drafter_node
+from app.agents.orchestrator import _get_llm, generate_enforcement_mandate, legal_drafter_node
 
 
 class _UnsafeResponse:
@@ -14,6 +14,11 @@ class _UnsafeLLM:
 
 
 class GuardrailTests(unittest.TestCase):
+    def test_llm_is_opt_in_for_reliable_deployment(self):
+        with patch.dict("os.environ", {"AEROSHIELD_ENABLE_LLM": "false"}), \
+             patch("app.agents.orchestrator.GROQ_API_KEY", "configured-key"):
+            self.assertIsNone(_get_llm())
+
     def test_deterministic_fallback_never_declares_violation(self):
         with patch("app.agents.orchestrator._get_llm", return_value=None):
             result = generate_enforcement_mandate(1, 150.0, "Example source", [])

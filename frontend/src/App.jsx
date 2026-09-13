@@ -104,7 +104,7 @@ export default function App() {
   const [showSources, setShowSources] = useState(true);
   const [showStations, setShowStations] = useState(true);
   const [showFires, setShowFires] = useState(true);
-  const [liveContext, setLiveContext] = useState(null);
+  const [liveContext, setLiveContext] = useState({ mode: 'loading', stale: false });
   const [satelliteData, setSatelliteData] = useState({ fires: [], mode: 'loading' });
   const [advisoryLanguage, setAdvisoryLanguage] = useState('EN');
 
@@ -158,7 +158,6 @@ export default function App() {
   }, []);
 
   const handleHotspotClick = async (cell) => {
-    if (cell.predicted_pm25 < 90) return;
     setSelectedCell(cell); setAnalyzing(true); setMandateData(null); setAgentError(null); setDispatchState(DISPATCH_STATES.IDLE);
     const windDir = windData?.direction_deg ?? cell.wind_direction ?? 315;
     setPlumeLine(plumeTraceLine(cell.lat, cell.lon, windDir));
@@ -240,8 +239,8 @@ export default function App() {
         <h1 style={{ margin: 0, fontSize: '19px', letterSpacing: '3px', color: '#00ffcc', whiteSpace: 'nowrap', flexShrink: 0 }}>
           AEROSHIELD <span style={{ color: '#444', fontWeight: 300 }}>IQ</span><span style={{ fontSize: '10px', color: '#333', marginLeft: '8px' }}>DELHI v3 · UNCERTAINTY AWARE</span>
         </h1>
-        <div title={liveContext?.spatial_resolution_note || 'Operational data status'} style={{ padding: '4px 8px', borderRadius: '4px', border: `1px solid ${liveContext?.stale ? '#7a5b14' : '#126b57'}`, color: liveContext?.stale ? '#ffc857' : '#00ffcc', backgroundColor: liveContext?.stale ? '#241b07' : '#06231e', fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap' }}>
-          {liveContext?.mode === 'live' ? '● LIVE CONTEXT' : liveContext?.mode === 'memory_cache' ? '● LIVE · CACHED 15M' : '● FALLBACK MODE'}
+        <div title={liveContext?.spatial_resolution_note || 'Operational data status'} style={{ padding: '4px 8px', borderRadius: '4px', border: `1px solid ${liveContext?.mode === 'loading' ? '#28505a' : liveContext?.stale ? '#7a5b14' : '#126b57'}`, color: liveContext?.mode === 'loading' ? '#76c7d7' : liveContext?.stale ? '#ffc857' : '#00ffcc', backgroundColor: liveContext?.mode === 'loading' ? '#081b20' : liveContext?.stale ? '#241b07' : '#06231e', fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+          {liveContext?.mode === 'loading' ? '◌ CONNECTING LIVE DATA' : liveContext?.mode === 'live' ? '● LIVE CONTEXT' : liveContext?.mode === 'memory_cache' ? '● LIVE · CACHED 15M' : '● FALLBACK MODE'}
           {liveContext?.current?.pm25 != null && ` · PM2.5 ${Number(liveContext.current.pm25).toFixed(1)}`}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, maxWidth: '420px' }}>
@@ -289,7 +288,11 @@ export default function App() {
           </div>
         )}
         <MapContainer center={[28.6280, 77.2090]} zoom={11} minZoom={10} maxZoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }} zoomControl={false}>
-          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" attribution="&copy; CARTO" />
+          <TileLayer
+            className="aeroshield-basemap"
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          />
           {windData && <WindArrow wind={windData} />}
           {plumeLine && <Polyline positions={plumeLine} pathOptions={{ color: '#ff6600', weight: 2.5, dashArray: '7 5', opacity: 0.9 }} />}
           {showStations && DELHI_STATIONS.map(s => (
@@ -312,7 +315,7 @@ export default function App() {
               <Popup>
                 <div style={{ color: '#222', fontSize: '13px' }}>
                   <strong>Grid Cell #{cell.cell_id}</strong><br />PM2.5: <strong>{cell.predicted_pm25.toFixed(1)} µg/m³</strong><br />AQI: <strong>{cell.aqi_category?.label}</strong><br />
-                  {cell.predicted_pm25 >= 90 && <em style={{ color: 'red', fontSize: '11px' }}>⚡ Click to dispatch AI agent</em>}
+                  <em style={{ color: cell.predicted_pm25 >= 90 ? 'red' : '#555', fontSize: '11px' }}>⚡ Click to assess intervention readiness</em>
                 </div>
               </Popup>
             </CircleMarker>
@@ -329,7 +332,7 @@ export default function App() {
           </div>
           {!selectedCell && !analyzing && !showCaseLog && (
             <div>
-              <p style={{ color: '#666', fontSize: '12px', lineHeight: '1.7', marginBottom: '14px' }}>Choose a forecast time, then click an <span style={{ color: '#ff9800' }}>orange</span> or <span style={{ color: '#f44336' }}>red</span> cell. AeroShield will quantify forecast uncertainty, test source-ranking stability, and recommend field-verification actions.</p>
+              <p style={{ color: '#666', fontSize: '12px', lineHeight: '1.7', marginBottom: '14px' }}>Choose a forecast time, then click any grid cell. AeroShield will quantify uncertainty and intervention readiness; <span style={{ color: '#ff9800' }}>orange</span> and <span style={{ color: '#f44336' }}>red</span> cells receive priority.</p>
               <div style={{ borderTop: '1px solid #111', paddingTop: '10px', fontSize: '11px', color: '#333', lineHeight: '2' }}><div>🔵 CPCB sensor stations</div><div>🔴 Industrial / construction sources</div><div>● LightGBM surrogate PM2.5 grid</div></div>
             </div>
           )}

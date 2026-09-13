@@ -28,6 +28,12 @@ class EnforcementState(TypedDict):
     error:              Optional[str]
 
 def _get_llm():
+    # The deterministic path is the deployment default: it is fast, reproducible,
+    # and keeps enforcement language inside reviewed templates. Operators may
+    # explicitly enable Groq drafting without making it a runtime dependency.
+    llm_enabled = os.getenv("AEROSHIELD_ENABLE_LLM", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if not llm_enabled:
+        return None
     if not GROQ_API_KEY or GROQ_API_KEY == "MOCK_KEY_FOR_DEV": return None
     try:
         from langchain_groq import ChatGroq
@@ -128,6 +134,7 @@ def generate_enforcement_mandate(cell_id: int, aqi_value: float, primary_violato
         final_state = legal_drafter_node(planner_node(initial_state))
         final_state["error"] = str(e)
 
+    llm_enabled = os.getenv("AEROSHIELD_ENABLE_LLM", "false").strip().lower() in {"1", "true", "yes", "on"}
     return {
         "statute_violated": final_state.get("statute_violated") or "Potentially relevant: Air Act, 1981 (human review required)",
         "legal_notice_draft": final_state.get("legal_notice_draft") or "Inspection request only; no violation finding has been made.",
@@ -137,5 +144,6 @@ def generate_enforcement_mandate(cell_id: int, aqi_value: float, primary_violato
         "applicable_statutes": final_state.get("applicable_statutes", []),
         "enforcement_brief": final_state.get("enforcement_brief", ""),
         "_pipeline": "langgraph_2_agent",
+        "_generation_mode": "groq_llm" if llm_enabled and GROQ_API_KEY else "deterministic_guardrail",
         "_error": final_state.get("error")
     }

@@ -14,5 +14,7 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      - key: AEROSHIELD_ENABLE_LLM
+        value: false
       - key: AEROSHIELD_CORS_ORIGINS
         sync: false
