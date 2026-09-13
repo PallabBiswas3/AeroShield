@@ -283,7 +283,7 @@ export default function App() {
           <button onClick={() => fetchGridData(forecastHour, forecastDate)} style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', backgroundColor: '#00ffcc', color: '#000', border: 'none', borderRadius: '4px' }}>{loading ? '⏳' : '⚡ Forecast'}</button>
         </div>
       </div>
-      <div style={{ flex: 1, position: 'relative' }}>
+      <div className="dashboard-map-area" style={{ flex: 1, position: 'relative' }}>
         {loading && (
           <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px' }}>
             <div style={{ color: '#00ffcc', fontSize: '16px', letterSpacing: '2px' }}>⚡ RUNNING UNCERTAINTY-AWARE ESTIMATE</div>
@@ -326,13 +326,16 @@ export default function App() {
         </MapContainer>
 
         {/* ── Intervention Sidebar ───────────────────────────────────────── */}
-        <div style={{ position: 'absolute', top: '14px', right: '14px', width: '365px', backgroundColor: 'rgba(6,6,6,0.97)', padding: '18px', borderRadius: '8px', border: '1px solid #1e1e1e', boxShadow: '0 4px 32px rgba(0,0,0,0.8)', zIndex: 1000, maxHeight: 'calc(100vh - 110px)', overflowY: 'auto' }}>
-          <h2 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#fff', borderBottom: '1px solid #1e1e1e', paddingBottom: '10px', letterSpacing: '1.5px', textTransform: 'uppercase' }}>⚡ Intervention Copilot</h2>
-          <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginBottom: '12px' }}>
-            {[['#00e676', 'Good'], ['#b2ff59', 'Satis.'], ['#ffee58', 'Mod.'], ['#ff9800', 'Poor'], ['#f44336', 'V.Poor'], ['#b71c1c', 'Severe']].map(([c, l]) => (
-              <span key={l} style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: '#666' }}><span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: c, display: 'inline-block' }} />{l}</span>
-            ))}
+        <aside className="intervention-sidebar">
+          <div className="intervention-sidebar__header">
+            <h2 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#fff', borderBottom: '1px solid #1e1e1e', paddingBottom: '10px', letterSpacing: '1.5px', textTransform: 'uppercase' }}>⚡ Intervention Copilot</h2>
+            <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+              {[['#00e676', 'Good'], ['#b2ff59', 'Satis.'], ['#ffee58', 'Mod.'], ['#ff9800', 'Poor'], ['#f44336', 'V.Poor'], ['#b71c1c', 'Severe']].map(([c, l]) => (
+                <span key={l} style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: '#666' }}><span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: c, display: 'inline-block' }} />{l}</span>
+              ))}
+            </div>
           </div>
+          <div className="intervention-sidebar__content">
           {!selectedCell && !analyzing && !showCaseLog && (
             <div>
               <p style={{ color: '#666', fontSize: '12px', lineHeight: '1.7', marginBottom: '14px' }}>Choose a forecast time, then click any grid cell. AeroShield will quantify uncertainty and intervention readiness; <span style={{ color: '#ff9800' }}>orange</span> and <span style={{ color: '#f44336' }}>red</span> cells receive priority.</p>
@@ -424,15 +427,6 @@ export default function App() {
                 <div style={{ color: '#444', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '5px' }}>Draft field-verification brief</div>
                 <div style={{ color: '#888', fontSize: '11px', lineHeight: '1.65', fontStyle: 'italic', backgroundColor: '#080808', padding: '10px', borderRadius: '4px', border: '1px solid #161616', whiteSpace: 'pre-wrap', maxHeight: '130px', overflowY: 'auto' }}>{mandateData.automated_mandate.legal_notice_draft}</div>
               </div>
-              {dispatchState === DISPATCH_STATES.IDLE && (
-                <button onClick={handleDispatch} style={{ width: '100%', padding: '11px', backgroundColor: '#00ffcc', color: '#000', border: 'none', borderRadius: '4px', fontWeight: '700', cursor: 'pointer', fontSize: '13px', letterSpacing: '0.5px' }}>✓ Approve Field Verification</button>
-              )}
-              {dispatchState === DISPATCH_STATES.SENT && (
-                <div style={{ width: '100%', padding: '11px', backgroundColor: '#111', color: '#00ffcc', border: '1px solid #00ffcc44', borderRadius: '4px', textAlign: 'center', fontSize: '12px' }}>⏳ Transmitting to Field Inspector...</div>
-              )}
-              {dispatchState === DISPATCH_STATES.CONFIRMED && (
-                <div style={{ width: '100%', padding: '11px', backgroundColor: '#071407', color: '#00ff66', border: '1px solid #00ff6644', borderRadius: '4px', textAlign: 'center', fontSize: '12px', fontWeight: '700' }}>✅ Squad Dispatched — Case #{mandateData.cell_id}-{String(new Date().getHours()).padStart(2, '0')}{String(new Date().getMinutes()).padStart(2, '0')}</div>
-              )}
             </div>
           )}
 
@@ -464,7 +458,22 @@ export default function App() {
               </div>
             </div>
           )}
-        </div>
+          </div>
+
+          {mandateData && !analyzing && !showCaseLog && (
+            <div className="intervention-sidebar__action">
+              {dispatchState === DISPATCH_STATES.IDLE && (
+                <button onClick={handleDispatch} style={{ width: '100%', padding: '11px', boxSizing: 'border-box', backgroundColor: '#00ffcc', color: '#000', border: 'none', borderRadius: '4px', fontWeight: '700', cursor: 'pointer', fontSize: '13px', letterSpacing: '0.5px' }}>✓ Approve Field Verification</button>
+              )}
+              {dispatchState === DISPATCH_STATES.SENT && (
+                <div style={{ width: '100%', padding: '11px', boxSizing: 'border-box', backgroundColor: '#111', color: '#00ffcc', border: '1px solid #00ffcc44', borderRadius: '4px', textAlign: 'center', fontSize: '12px' }}>⏳ Transmitting to Field Inspector...</div>
+              )}
+              {dispatchState === DISPATCH_STATES.CONFIRMED && (
+                <div style={{ width: '100%', padding: '11px', boxSizing: 'border-box', backgroundColor: '#071407', color: '#00ff66', border: '1px solid #00ff6644', borderRadius: '4px', textAlign: 'center', fontSize: '12px', fontWeight: '700' }}>✅ Squad Dispatched — Case #{mandateData.cell_id}-{String(new Date().getHours()).padStart(2, '0')}{String(new Date().getMinutes()).padStart(2, '0')}</div>
+              )}
+            </div>
+          )}
+        </aside>
 
         {/* ── Footer ────────────────────────────────────────────────────── */}
         <div style={{ position: 'absolute', bottom: '14px', left: '14px', backgroundColor: 'rgba(0,0,0,0.88)', padding: '7px 12px', borderRadius: '5px', border: '1px solid #1a1a1a', zIndex: 1000, fontSize: '10px', color: '#444' }}>
