@@ -53,7 +53,7 @@ function WindArrow({ wind }) {
     }
     const arrowIcon = L.divIcon({
       className: '',
-      html: `<div style="transform: rotate(${wind.direction_deg}deg); font-size: 28px; color: #00ffcc; text-shadow: 0 0 10px #00ffcc99; line-height: 1; user-select: none;">↑</div>`,
+      html: `<div title="Wind flow direction" style="transform: rotate(${(wind.direction_deg + 180) % 360}deg); font-size: 28px; color: #00ffcc; text-shadow: 0 0 10px #00ffcc99; line-height: 1; user-select: none;">↑</div>`,
       iconSize: [36, 36],
       iconAnchor: [18, 18],
     });
@@ -86,8 +86,11 @@ const priorityColor = (p) => ({ CRITICAL: '#7f0000', HIGH: '#bf360c', MEDIUM: '#
 const pythonWeekday = (date) => (date.getDay() + 6) % 7; // Monday=0, matching pandas/Python
 
 function formatDate(d) {
-  return d.toISOString().split('T')[0];
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
+  const part = type => parts.find(p => p.type === type).value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
 }
+const delhiHour = () => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
 
 export default function App() {
   const [gridData, setGridData] = useState([]);
@@ -99,8 +102,8 @@ export default function App() {
   const [mandateData, setMandateData] = useState(null);
   const [plumeLine, setPlumeLine] = useState(null);
   const [dispatchState, setDispatchState] = useState(DISPATCH_STATES.IDLE);
-  const [forecastHour, setForecastHour] = useState(new Date().getHours());
-  const [sliderHour, setSliderHour] = useState(new Date().getHours());
+  const [forecastHour, setForecastHour] = useState(delhiHour);
+  const [sliderHour, setSliderHour] = useState(delhiHour);
   const [showSources, setShowSources] = useState(true);
   const [showStations, setShowStations] = useState(true);
   const [showFires, setShowFires] = useState(true);
@@ -146,7 +149,7 @@ export default function App() {
     axios.get('/api/model-info')
       .then(r => { if (r.data.status === 'success') setModelMeta(r.data.meta); })
       .catch(() => { });
-    fetchGridData(new Date().getHours(), formatDate(new Date()));
+    fetchGridData(delhiHour(), formatDate(new Date()));
     axios.get('/api/live-context')
       .then(r => setLiveContext(r.data))
       .catch(() => setLiveContext({ mode: 'unavailable', stale: true }));
@@ -261,8 +264,8 @@ export default function App() {
         {windData && (
           <div style={{ display: 'flex', gap: '12px', backgroundColor: '#111', padding: '5px 12px', borderRadius: '5px', border: '1px solid #222', fontSize: '12px', color: '#aaa', whiteSpace: 'nowrap' }}>
             <span>🌬️ <strong style={{ color: '#fff' }}>{windData.speed_ms} m/s</strong></span>
-            <span>🧭 <strong style={{ color: '#fff' }}>{windData.direction_deg}° {windCompass(windData.direction_deg)}</strong></span>
-            <span style={{ color: '#333', fontSize: '10px' }}>{windData.source}</span>
+            <span>🧭 From <strong style={{ color: '#fff' }}>{windData.direction_deg}° {windCompass(windData.direction_deg)}</strong></span>
+            <span title={windData.fallback_note || windData.source} style={{ color: windData.is_forecast ? '#9cc' : '#ffc857', fontSize: '11px' }}>{windData.is_forecast ? 'Forecast wind · Delhi centre' : 'SCENARIO WIND · live weather unavailable'}</span>
           </div>
         )}
         {aqiStats && (

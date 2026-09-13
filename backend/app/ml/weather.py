@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
+import math
 
 import requests
 
@@ -12,6 +13,7 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 _CACHE = {}
 _LOCK = Lock()
 _TTL_SECONDS = 15 * 60
+_FAILURES = {}
 
 
 def _parse_local_hour(value: str) -> datetime:
@@ -35,7 +37,10 @@ def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
         if cached and now - cached[0] < _TTL_SECONDS:
             payload = cached[1]
         else:
-            response = requests.get(
+            if key in _FAILURES and now < _FAILURES[key]:
+                raise RuntimeError('Weather provider unavailable; retry cooldown active')
+            try:
+                response = requests.get(
                 FORECAST_URL,
                 params={
                     "latitude": lat,
@@ -47,9 +52,12 @@ def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
                 },
                 timeout=12,
             )
-            response.raise_for_status()
-            payload = response.json()
-            _CACHE[key] = (now, payload)
+                response.raise_for_status()
+                payload = response.json()
+            except requests.RequestException as exc:
+                _FAILURES[key] = monotonic() + 60
+                raise RuntimeError('Weather provider unavailable or rate-limited; using scenario wind') from exc
+            _CACHE[key] = (monotonic(), payload)
 
     hourly = payload.get("hourly", {})
     times = hourly.get("time", [])
@@ -58,7 +66,7 @@ def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
     target = when.replace(tzinfo=None, minute=0, second=0, microsecond=0)
     parsed = [_parse_local_hour(value) for value in times]
     index = min(range(len(parsed)), key=lambda i: abs((parsed[i] - target).total_seconds()))
-    if abs((parsed[index] - target).total_seconds()) > 3600:
+    if parsed[index] != target:
         raise ValueError("requested time is outside the available forecast horizon")
 
     def value(name: str):
@@ -67,10 +75,13 @@ def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
             return None
         return float(values[index])
 
+    speed, direction = value('wind_speed_10m'), value('wind_direction_10m')
+    if speed is None or direction is None or not math.isfinite(speed) or not math.isfinite(direction) or not 0 <= speed <= 75 or not 0 <= direction <= 360:
+        raise RuntimeError('Incomplete or invalid forecast wind; using scenario wind')
     return {
         "forecast_time": times[index],
-        "wind_speed": value("wind_speed_10m"),
-        "wind_direction": value("wind_direction_10m"),
+        "wind_speed": speed,
+        "wind_direction": direction % 360,
         "boundary_layer_height": value("boundary_layer_height"),
         "source": "Open-Meteo 16-day forecast",
         "fetched_at": datetime.now(timezone.utc).isoformat(),

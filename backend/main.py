@@ -261,6 +261,9 @@ async def city_grid_status(
             "source": wind_source,
             "forecast_at": forecast_at,
             "fallback_note": weather_note,
+            "is_forecast": wind_source != "Manual meteorological fallback",
+            "direction_convention": "from_degrees_clockwise_from_north",
+            "flow_to_deg": (wind_direction + 180) % 360,
         }
         
         return {"status": "success", "grid": grid_data, "wind_meta": wind_meta, "uncertainty_available": True,
