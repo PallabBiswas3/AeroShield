@@ -62,3 +62,4 @@ backend/*.pkl
 backend/*.joblib
 backend/*.model
 data/runtime_cache/
+data/prospective/

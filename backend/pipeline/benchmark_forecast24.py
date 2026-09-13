@@ -6,6 +6,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMRegressor
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from app.ml.forecast24 import station_hours, supervised, chronological_split, rolling_splits
 
 
@@ -14,12 +19,19 @@ def metrics(y, prediction):
     return {'rmse': float(np.sqrt(np.mean(error**2))), 'mae': float(np.mean(abs(error)))}
 
 
-def evaluate(train, calibration, test, residual=False, adaptive=False, gate=False):
+def evaluate(train, calibration, test, residual=False, adaptive=False, gate=False, model_kind='lightgbm'):
     features = ['pm25', 'lag_1h', 'lag_3h', 'lag_24h', 'lag_168h', 'target_hour', 'target_weekday', 'target_month', 'location_id']
     # Fixed hyperparameters: no test-set selection. LightGBM handles missing lags.
     models = [LGBMRegressor(objective='quantile', alpha=q, n_estimators=200,
                            num_leaves=15, learning_rate=.05, random_state=42,
                            n_jobs=1, verbosity=-1) for q in [.05,.5,.95]]
+    if model_kind == 'ridge':
+        # Fit imputation/scaling/encoding exclusively on the training block.
+        # Identical point bands become absolute-error conformal intervals.
+        models = [make_pipeline(ColumnTransformer([
+            ('history', make_pipeline(SimpleImputer(strategy='median', add_indicator=True), StandardScaler()), features[:5]),
+            ('calendar_station', OneHotEncoder(handle_unknown='ignore', sparse_output=False), features[5:]),
+        ]), Ridge(alpha=10.)) for _ in range(3)]
     for model in models:
         model.fit(train[features], train.target_pm25-train.pm25 if residual else train.target_pm25)
     cal = np.sort(np.column_stack([m.predict(calibration[features]) for m in models]), axis=1)
@@ -82,6 +94,7 @@ def evaluate(train, calibration, test, residual=False, adaptive=False, gate=Fals
     return {
         'test_start':str(test.issue_time.min()), 'test_end':str(test.issue_time.max()),
         'approach':'persistence_residual' if residual else 'absolute_target',
+        'model_kind':model_kind,
         'calibration':'delayed_station_168_scores' if adaptive else 'fixed_pooled',
         'persistence_gate_stations':persistence_stations,
         'rows':{'train':len(train),'calibration':len(calibration),'test':len(test)},
@@ -98,6 +111,7 @@ def main():
     parser.add_argument('--residual', action='store_true', help='Learn change from current PM2.5 rather than absolute concentration')
     parser.add_argument('--adaptive', action='store_true', help='Update station intervals using only matured target feedback')
     parser.add_argument('--gate', action='store_true', help='Select persistence on an earlier, separate selection window')
+    parser.add_argument('--model', choices=['lightgbm','ridge'], default='lightgbm')
     args = parser.parse_args()
     path = Path(__file__).resolve().parents[2]/'data/raw_openaq/delhi_all_stations_2025.csv'
     hours, quality = station_hours(pd.read_csv(path))
@@ -106,7 +120,7 @@ def main():
     report = {'scope':'retrospective station-level history-only t+24 development benchmark',
               'data_sha256':hashlib.sha256(path.read_bytes()).hexdigest(), 'quality':quality,
               'evaluation':'rolling origin' if args.rolling else 'single chronological holdout',
-              'folds':[evaluate(*split, residual=args.residual, adaptive=args.adaptive, gate=args.gate) for split in splits]}
+              'folds':[evaluate(*split, residual=args.residual, adaptive=args.adaptive, gate=args.gate, model_kind=args.model) for split in splits]}
     print(json.dumps(report, indent=2, allow_nan=False))
 
 

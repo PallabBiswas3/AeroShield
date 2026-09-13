@@ -22,7 +22,7 @@ def _parse_local_hour(value: str) -> datetime:
 
 
 def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
-    """Return forecast wind and mixing-height values nearest to ``when``."""
+    """Return forecast wind and mixing height for the requested local hour."""
     if when.tzinfo is not None:
         # API timestamps are requested in Asia/Kolkata. Callers must provide a
         # local wall-clock value or an aware datetime already in that zone;
@@ -36,6 +36,7 @@ def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
         cached = _CACHE.get(key)
         if cached and now - cached[0] < _TTL_SECONDS:
             payload = cached[1]
+            fetched_at = cached[2]
         else:
             if key in _FAILURES and now < _FAILURES[key]:
                 raise RuntimeError('Weather provider unavailable; retry cooldown active')
@@ -57,7 +58,8 @@ def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
             except requests.RequestException as exc:
                 _FAILURES[key] = monotonic() + 60
                 raise RuntimeError('Weather provider unavailable or rate-limited; using scenario wind') from exc
-            _CACHE[key] = (monotonic(), payload)
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            _CACHE[key] = (monotonic(), payload, fetched_at)
 
     hourly = payload.get("hourly", {})
     times = hourly.get("time", [])
@@ -84,5 +86,5 @@ def get_forecast_weather(lat: float, lon: float, when: datetime) -> dict:
         "wind_direction": direction % 360,
         "boundary_layer_height": value("boundary_layer_height"),
         "source": "Open-Meteo 16-day forecast",
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": fetched_at,
     }
