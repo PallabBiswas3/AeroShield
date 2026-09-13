@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 from datetime import datetime, timezone
+from hashlib import sha256
 from io import StringIO
 import json
 import os
 from pathlib import Path
 import math
+from threading import Lock
+from time import monotonic
 
 import requests
 
@@ -18,6 +22,10 @@ FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv/{key}/VIIRS_SNPP_
 DELHI_REGION = (76.70, 28.20, 77.60, 29.10)
 _ROOT = Path(__file__).resolve().parents[2]
 _CACHE_PATH = _ROOT / "data" / "runtime_cache" / "firms_delhi.json"
+_LIVE_TTL_SECONDS = 300
+_FAILURE_TTL_SECONDS = 60
+_memory_cache: dict | None = None
+_cache_lock = Lock()
 
 
 def _safe_failure_reason(exc: Exception) -> str:
@@ -70,6 +78,24 @@ def _parse_firms_csv(text: str) -> list[dict]:
 def get_satellite_fires() -> dict:
     """Fetch FIRMS evidence when configured; otherwise expose availability honestly."""
     key = os.getenv("NASA_FIRMS_MAP_KEY", "").strip()
+    # Keep the configured key out of the cache, and invalidate cached evidence
+    # when the key changes or is removed.
+    key_id = sha256(key.encode("utf-8")).hexdigest() if key else None
+    with _cache_lock:
+        global _memory_cache
+        if _memory_cache and _memory_cache["key_id"] == key_id and monotonic() < _memory_cache["expires_at"]:
+            result = deepcopy(_memory_cache["result"])
+            if result["mode"] == "live":
+                result["mode"] = "memory_cache"
+            return result
+
+        result = _fetch_satellite_fires(key)
+        ttl = _LIVE_TTL_SECONDS if result["mode"] == "live" else _FAILURE_TTL_SECONDS
+        _memory_cache = {"key_id": key_id, "expires_at": monotonic() + ttl, "result": deepcopy(result)}
+        return result
+
+
+def _fetch_satellite_fires(key: str) -> dict:
     if key:
         try:
             bbox = ",".join(str(value) for value in DELHI_REGION)

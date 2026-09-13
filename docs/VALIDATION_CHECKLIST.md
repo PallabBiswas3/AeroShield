@@ -70,6 +70,10 @@ dates, and outputs in the PR before marking each item complete.
   sanitized failure category; then restore the key and confirm `mode=live`.
 - [ ] Confirm the satellite timestamp, live/cache badge, map markers, and ranked
   wind/distance evidence agree for the same request.
+- [ ] Click two hotspots within five minutes. After a successful FIRMS fetch,
+  subsequent requests should report `mode=memory_cache` with the same `fetched_at`
+  (the dashboard may have warmed the cache first). Compare `workflow_timing.satellite_fetch_seconds` and
+  `workflow_timing.brief_generation_seconds` before claiming a speedup.
 - [ ] Restart/redeploy the Render service and disclose that the demo SQLite case
   log and runtime caches are ephemeral unless a persistent disk/database is used.
 - [ ] Confirm no secrets, runtime cache, local database changes, or unrelated

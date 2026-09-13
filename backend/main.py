@@ -116,12 +116,14 @@ async def analyze_hotspot(payload: PredictionRequest):
     action_gate = "FIELD_VERIFICATION" if interval is not None and lower_bound >= 90 and rank_stability >= 50 else "MONITOR_AND_VERIFY"
 
     # 3. Draft a human-review brief. Source attribution alone is not legal proof.
+    brief_started = perf_counter()
     enforcement_data = generate_enforcement_mandate(
         cell_id=payload.cell_id,
         aqi_value=predicted_pm25,
         primary_violator=primary_culprit["name"],
         attribution_matrix=attribution_results # Pass full matrix to LangGraph
     )
+    brief_seconds = round(perf_counter() - brief_started, 3)
 
     intervention_plan = rank_interventions(
         predicted_pm25=predicted_pm25,
@@ -129,7 +131,9 @@ async def analyze_hotspot(payload: PredictionRequest):
         exposed_population=payload.exposed_population,
         sensitive_sites=payload.sensitive_sites,
     )
+    satellite_started = perf_counter()
     satellite = get_satellite_fires()
+    satellite_seconds = round(perf_counter() - satellite_started, 3)
     fire_evidence = rank_fire_evidence(
         payload.lat, payload.lon, payload.wind_direction, satellite.get("fires", [])
     )[:5]
@@ -173,6 +177,8 @@ async def analyze_hotspot(payload: PredictionRequest):
             "signal_received_at": signal_received_at,
             "recommendation_completed_at": completed_at,
             "processing_seconds": round(perf_counter() - analysis_started, 3),
+            "brief_generation_seconds": brief_seconds,
+            "satellite_fetch_seconds": satellite_seconds,
             "comparison_scope": "System processing time only; no claim about real agency response time.",
         },
         "automated_mandate": enforcement_data,
